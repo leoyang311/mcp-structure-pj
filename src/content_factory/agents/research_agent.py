@@ -1,5 +1,6 @@
 """
 Research Agent - 话题研究和信息收集
+集成反幻觉技术确保研究准确性
 """
 import json
 import asyncio
@@ -9,11 +10,13 @@ from datetime import datetime
 
 from .base import BaseAgent
 from ..models import ResearchData
+from ..utils.anti_hallucination import FactCheckingMixin, AntiHallucinationEngine
 
 
-class ResearchAgent(BaseAgent):
+class ResearchAgent(FactCheckingMixin, BaseAgent):
     """
     研究Agent - 负责话题研究、信息收集和分析
+    集成反幻觉技术确保研究准确性
     """
     
     def __init__(self, search_api_key: str = None, logger=None):

@@ -1,5 +1,6 @@
 """
 Writer Agent - 内容写作和生成
+集成反幻觉技术确保内容准确性
 """
 import asyncio
 from typing import Any, Dict, List
@@ -9,11 +10,13 @@ import uuid
 from .base import BaseAgent
 from ..models import ContentVersion, Platform, ContentType, ResearchData
 from ..utils import get_content_prompt_template, get_title_generation_prompt
+from ..utils.anti_hallucination import FactCheckingMixin
 
 
-class WriterAgent(BaseAgent):
+class WriterAgent(FactCheckingMixin, BaseAgent):
     """
     写作Agent - 负责根据研究数据生成多平台适配的内容
+    集成反幻觉技术确保内容准确性和可信度
     """
     
     def __init__(self, llm_client=None, logger=None):
@@ -333,4 +336,65 @@ class WriterAgent(BaseAgent):
             
         except Exception as e:
             self.logger.error(f"LLM call failed: {str(e)}")
+            raise
+
+    # 实现FactCheckingMixin要求的方法
+    async def _generate_initial_content(self, prompt: str, platform: str, research_data: Dict) -> str:
+        """生成初始内容 - 实现FactCheckingMixin接口"""
+        try:
+            platform_enum = Platform(platform.lower()) if isinstance(platform, str) else platform
+            research_data_obj = ResearchData.from_dict(research_data) if isinstance(research_data, dict) else research_data
+            
+            # 生成标题
+            titles = await self._generate_titles(research_data_obj, platform_enum)
+            title = titles[0] if titles else f"{research_data_obj.topic} - {platform}"
+            
+            # 生成内容
+            content = await self._generate_content(research_data_obj, platform_enum, title)
+            
+            return content
+            
+        except Exception as e:
+            self.logger.error(f"Error generating initial content: {e}")
+            return "Error generating content"
+
+    async def generate_verified_content_for_platform(
+        self, 
+        research_data: ResearchData, 
+        platform: Platform
+    ) -> List[ContentVersion]:
+        """
+        为指定平台生成经过验证的内容
+        """
+        try:
+            self.logger.info(f"Generating verified content for platform: {platform}")
+            
+            # 使用反幻觉混入类生成验证内容
+            verified_content = await self.generate_verified_content(
+                prompt=research_data.topic,
+                platform=platform.value,
+                research_data=research_data.to_dict()
+            )
+            
+            # 生成标题
+            titles = await self._generate_titles(research_data, platform)
+            
+            # 创建内容版本
+            content_versions = []
+            for i, title in enumerate(titles[:3]):  # 生成3个版本
+                version = ContentVersion(
+                    id=str(uuid.uuid4()),
+                    title=title,
+                    content=verified_content,
+                    platform=platform,
+                    content_type=ContentType.ARTICLE,
+                    score=0.0,
+                    created_at=datetime.now()
+                )
+                content_versions.append(version)
+            
+            return content_versions
+            
+        except Exception as e:
+            self.logger.error(f"Error generating verified content for {platform}: {str(e)}")
             raise

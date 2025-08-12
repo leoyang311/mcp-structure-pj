@@ -1,5 +1,6 @@
 """
 Scorer Agent - 内容质量评分和优选
+集成反幻觉评分确保内容准确性
 """
 import asyncio
 from typing import Any, Dict, List, Tuple
@@ -8,11 +9,14 @@ from datetime import datetime
 from .base import BaseAgent
 from ..models import ContentVersion, QualityScore, Platform, ContentType
 from ..utils import evaluate_content_quality
+from ..utils.enhanced_prompts import get_enhanced_scoring_prompt
+from ..utils.anti_hallucination import FactCheckingMixin
 
 
-class ScorerAgent(BaseAgent):
+class ScorerAgent(FactCheckingMixin, BaseAgent):
     """
     评分Agent - 负责对生成的内容进行质量评分和优选
+    集成反幻觉技术确保评分准确性
     """
     
     def __init__(self, logger=None):
