@@ -19,9 +19,9 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
     集成反幻觉技术确保内容准确性和可信度
     """
     
-    def __init__(self, llm_client=None, logger=None):
+    def __init__(self, openai_client=None, logger=None):
         super().__init__("writer_agent", logger)
-        self.llm_client = llm_client
+        self.openai_client = openai_client
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -132,7 +132,7 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             )
             
             # 如果有LLM客户端，使用AI生成
-            if self.llm_client:
+            if self.openai_client:
                 response = await self._call_llm(prompt)
                 titles = [title.strip() for title in response.split('\n') if title.strip()]
                 if titles:
@@ -208,7 +208,7 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             )
             
             # 如果有LLM客户端，使用AI生成
-            if self.llm_client:
+            if self.openai_client:
                 content = await self._call_llm(prompt)
                 if content and len(content.strip()) > 100:
                     return content.strip()
@@ -327,12 +327,24 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
         调用LLM生成内容
         """
         try:
-            # 模拟LLM调用 (实际应用中应该集成真实的LLM API)
-            await asyncio.sleep(1)  # 模拟API延迟
+            if not self.openai_client:
+                self.logger.warning("No OpenAI client available, using fallback content")
+                raise Exception("No OpenAI client available")
             
-            # 这里应该调用真实的LLM API
-            # 返回模拟响应
-            return f"这是LLM基于提示词生成的内容：\n\n{prompt[:100]}...\n\n[模拟LLM响应内容]"
+            # 调用真实的OpenAI API
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",  # 或使用配置的模型
+                messages=[
+                    {"role": "system", "content": "你是一个专业的内容创作者，擅长创作高质量、有价值的内容。请根据用户要求创作吸引人且有深度的内容。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            content = response.choices[0].message.content.strip()
+            self.logger.info(f"Successfully generated content via OpenAI API (length: {len(content)})")
+            return content
             
         except Exception as e:
             self.logger.error(f"LLM call failed: {str(e)}")

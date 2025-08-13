@@ -354,10 +354,15 @@ class FactCheckingMixin:
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.anti_hallucination_engine = AntiHallucinationEngine(
-            self.openai_client, 
-            self.tavily_client
-        )
+        # 确保openai_client存在后再初始化
+        if hasattr(self, 'openai_client') and self.openai_client:
+            tavily_client = getattr(self, 'tavily_client', None)
+            self.anti_hallucination_engine = AntiHallucinationEngine(
+                self.openai_client, 
+                tavily_client
+            )
+        else:
+            self.anti_hallucination_engine = None
     
     async def generate_verified_content(self, prompt: str, platform: str, research_data: Dict) -> str:
         """生成经过验证的内容"""

@@ -18,11 +18,13 @@ from .core import *
 from .utils import *
 
 # 配置OpenAI
-import openai
+from openai import OpenAI
 
-# 配置OpenAI客户端
-openai.api_key = os.getenv("OPENAI_API_KEY")
-openai.api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+# 创建OpenAI客户端实例
+openai_client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+)
 
 # 系统配置
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "3"))
@@ -77,6 +79,9 @@ __all__ = [
     # Utils
     "get_platform_config",
     "evaluate_content_quality",
+    # Client
+    "openai_client",
+    "AGENT_CONFIGS",
     # Meta
     "__version__",
     "__author__",

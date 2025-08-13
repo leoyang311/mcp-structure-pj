@@ -201,6 +201,7 @@ def evaluate_content_quality(
         platform_adaptation=round(platform_adaptation, 2),
         engagement_potential=round(engagement_potential, 2),
         technical_quality=round(technical_quality, 2),
+        total_score=0.0  # 临时值，将通过calculate_total()计算
     )
     
     # 计算总分

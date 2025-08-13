@@ -53,29 +53,36 @@ class MasterController:
     def _init_agents(self, **configs):
         """初始化各个Agent"""
         try:
+            # 导入OpenAI客户端
+            from .. import openai_client, AGENT_CONFIGS
+            
             # 获取各Agent的配置
             research_config = configs.get("research_agent", {})
             writer_config = configs.get("writer_agent", {})
             video_config = configs.get("video_agent", {})
             scorer_config = configs.get("scorer_agent", {})
             
-            # 初始化Agent
+            # 初始化Agent，传递OpenAI客户端
             self.research_agent = ResearchAgent(
+                openai_client=openai_client,
                 search_api_key=research_config.get("search_api_key"),
                 logger=self.logger
             )
             
             self.writer_agent = WriterAgent(
-                llm_client=writer_config.get("llm_client"),
+                openai_client=openai_client,
                 logger=self.logger
             )
             
             self.video_agent = VideoAgent(
-                llm_client=video_config.get("llm_client"),
+                openai_client=openai_client,
                 logger=self.logger
             )
             
-            self.scorer_agent = ScorerAgent(logger=self.logger)
+            self.scorer_agent = ScorerAgent(
+                openai_client=openai_client,
+                logger=self.logger
+            )
             
             self.logger.info("All agents initialized successfully")
             

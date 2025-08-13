@@ -19,8 +19,9 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
     集成反幻觉技术确保研究准确性
     """
     
-    def __init__(self, search_api_key: str = None, logger=None):
+    def __init__(self, openai_client=None, search_api_key: str = None, logger=None):
         super().__init__("research_agent", logger)
+        self.openai_client = openai_client
         self.search_api_key = search_api_key
         self.search_engines = ["duckduckgo", "tavily"] if search_api_key else ["duckduckgo"]
     
@@ -227,7 +228,43 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
         生成研究总结
         """
         try:
-            # 基于收集的信息生成总结
+            if self.openai_client:
+                # 使用OpenAI API生成更智能的总结
+                prompt = f"""
+基于以下研究数据，为话题"{topic}"生成一个深入、客观的研究总结：
+
+关键要点：
+{chr(10).join(f"• {point}" for point in key_points)}
+
+市场趋势：
+{chr(10).join(f"• {trend}" for trend in trends)}
+
+信息来源数量：{len(sources)}
+
+请生成一个专业、有深度的研究总结，包含：
+1. 话题背景和重要性
+2. 关键发现和洞察
+3. 市场趋势和机会
+4. 潜在挑战和风险
+5. 结论和建议
+
+要求：客观分析，内容准确，语言专业，字数800-1200字。
+"""
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的研究分析师，擅长基于数据生成深入、客观的研究总结。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1500,
+                    temperature=0.3
+                )
+                
+                generated_summary = response.choices[0].message.content.strip()
+                self.logger.info(f"Generated research summary via OpenAI API (length: {len(generated_summary)})")
+                return generated_summary
+            
+            # 回退到基础模板生成
             summary = f"""
 基于对"{topic}"的深度研究，发现以下关键信息：
 

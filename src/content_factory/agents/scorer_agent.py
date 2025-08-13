@@ -19,8 +19,9 @@ class ScorerAgent(FactCheckingMixin, BaseAgent):
     集成反幻觉技术确保评分准确性
     """
     
-    def __init__(self, logger=None):
+    def __init__(self, openai_client=None, logger=None):
         super().__init__("scorer_agent", logger)
+        self.openai_client = openai_client
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
