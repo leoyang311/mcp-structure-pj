@@ -15,15 +15,16 @@ class UserDemographics:
     location_distribution: Dict[str, float]  # 地域分布
     education_level: Dict[str, float]   # 教育水平分布
 
-@dataclass  
+@dataclass
 class UserBehavior:
     """用户行为特征"""
     interests: List[str]                # 兴趣标签
     behavior_traits: List[str]          # 行为特点
     core_needs: List[str]              # 核心需求
     consumption_habits: List[str]       # 消费习惯
-
-@dataclass
+    psychological_pain_points: List[str] # 心理痛点（新增）
+    addiction_patterns: List[str]        # 成瘾模式（新增）
+    social_comparison_triggers: List[str] # 社交比较触发点（新增）@dataclass
 class ContentPreferences:
     """内容偏好"""
     popular_categories: Dict[str, float]  # 热门类目及占比
@@ -60,10 +61,13 @@ USER_PERSONAS: Dict[Platform, UserPersona] = {
             education_level={"本科及以上": 0.62, "其他": 0.38}
         ),
         behavior=UserBehavior(
-            interests=["二次元文化", "游戏", "科技", "学习知识", "争议话题"],
-            behavior_traits=["深度内容消费", "弹幕互动活跃", "幻想倾向", "寻求刺激", "经济拮据"],
-            core_needs=["知识获取", "娱乐刺激", "社交认同", "逃避现实"],
-            consumption_habits=["免费内容优先", "少量付费支持", "白嫖心理"]
+            interests=["二次元文化", "ACG内容", "知识学习", "科技数码", "游戏动漫"],
+            behavior_traits=["虚拟逃避", "假学习现象", "弹幕依赖", "数字囤积", "社交焦虑"],
+            core_needs=["情感避难所", "身份认同", "虚拟陪伴", "知识焦虑缓解"],
+            consumption_habits=["免费内容优先", "精神消费", "周边收集", "会员充值"],
+            psychological_pain_points=["现实适应困难", "成人责任恐惧", "社交缺失", "学习焦虑", "抑郁倾向"],
+            addiction_patterns=["准社会关系依赖", "弹幕参与感", "连续观看", "收藏不看"],
+            social_comparison_triggers=["学历能力", "二次元知识深度", "弹幕机智程度", "创作才能"]
         ),
         content_preferences=ContentPreferences(
             popular_categories={
@@ -74,17 +78,17 @@ USER_PERSONAS: Dict[Platform, UserPersona] = {
             content_format={
                 "optimal_duration": "5-15分钟",
                 "pacing": "信息密度高，剪辑紧凑", 
-                "style": "专业性与趣味性结合"
+                "style": "专业性与趣味性结合，避免说教"
             },
-            engagement_features=["弹幕梗", "彩蛋", "互动投票", "章节划分"]
+            engagement_features=["弹幕互动", "知识彩蛋", "二次元梗", "温暖治愈"]
         ),
         stereotypes=PlatformStereotypes(
-            positive_labels=["学习热情", "思维活跃", "创造力强", "互动性高"],
-            negative_labels=["经济拮据", "好高骛远", "寻求刺激", "容易被煽动"],
-            creation_dos=["提供免费价值", "满足好奇心", "设置互动点", "迎合幻想需求"],
-            creation_donts=["过度收费", "内容平淡", "忽视互动", "过于现实残酷"]
+            positive_labels=["有深度", "有文化", "创造力强", "情感丰富"],
+            negative_labels=["脆弱一代", "逃避现实", "躺平文化", "毒性饭圈"],
+            creation_dos=["提供情感价值", "构建虚拟陪伴", "满足求知欲", "创造安全空间"],
+            creation_donts=["强调现实残酷", "成人化说教", "过度商业化", "批判二次元文化"]
         ),
-        daily_usage_minutes=96,
+        daily_usage_minutes=150,  # 重度使用
         monthly_active_users="3.3亿"
     ),
     
@@ -97,67 +101,73 @@ USER_PERSONAS: Dict[Platform, UserPersona] = {
             education_level={"大专及以下": 0.58, "本科及以上": 0.42}
         ),
         behavior=UserBehavior(
-            interests=["娱乐", "美食", "生活", "情感"],
-            behavior_traits=["碎片化浏览", "算法依赖强", "冲动消费", "跟风模仿"],
-            core_needs=["娱乐解压", "获取资讯", "社交互动"],
-            consumption_habits=["直播带货", "冲动消费", "热点跟随"]
+            interests=["即时娱乐", "成功故事", "财富炫耀", "网红生活", "消费种草"],
+            behavior_traits=["即时满足", "冲动消费", "算法依赖", "多巴胺循环", "从众跟风"],
+            core_needs=["娱乐刺激", "成功幻想", "虚荣满足", "社交认同"],
+            consumption_habits=["直播冲动购买", "KOL推荐跟买", "挑战参与", "炫耀消费"],
+            psychological_pain_points=["FOMO恐惧", "相对剥夺感", "自控力下降", "现实扭曲", "社会焦虑"],
+            addiction_patterns=["无限滚动", "算法推送依赖", "KOL准社会关系", "挑战参与"],
+            social_comparison_triggers=["财富成功", "外貌身材", "生活方式", "社交影响力"]
         ),
         content_preferences=ContentPreferences(
             popular_categories={
-                "搞笑娱乐": 0.30, "生活技巧": 0.20, "美食探店": 0.15, "情感故事": 0.12,
-                "知识科普": 0.10, "才艺展示": 0.08, "萌宠": 0.03, "游戏": 0.02
+                "搞笑娱乐": 0.30, "成功励志": 0.20, "美食探店": 0.15, "情感故事": 0.12,
+                "财富炫耀": 0.10, "才艺展示": 0.08, "萌宠": 0.03, "游戏": 0.02
             },
             content_format={
                 "optimal_duration": "15-30秒",
-                "golden_rule": "黄金3秒开头抓人",
-                "visual_style": "画面变化快，特效丰富"
+                "golden_rule": "黄金3秒抓眼球",
+                "visual_style": "快节奏剪辑，强视觉冲击"
             },
-            engagement_features=["反转情节", "情绪价值", "互动钩子", "热点话题"]
+            engagement_features=["反转剧情", "情绪刺激", "成功暗示", "参与挑战"]
         ),
         stereotypes=PlatformStereotypes(
-            positive_labels=["接地气真实", "娱乐性强", "传播速度快", "全民参与"],
-            negative_labels=["内容低俗", "容易上瘾", "带货太多", "同质化严重"],
-            creation_dos=["紧跟热点话题", "使用流行音乐和特效", "真人出镜增加信任", "设置互动钩子"],
-            creation_donts=["内容过于复杂", "节奏拖沓", "画质模糊", "违规擦边"]
+            positive_labels=["有活力", "敢表达", "接地气", "传播力强"],
+            negative_labels=["容易上瘾", "冲动消费", "跟风盲目", "认知下降"],
+            creation_dos=["制造多巴胺循环", "暗示成功可能", "提供即时满足", "利用从众心理"],
+            creation_donts=["内容过于复杂", "节奏缓慢", "缺乏刺激点", "否定成功梦想"]
         ),
-        daily_usage_minutes=115,
+        daily_usage_minutes=150,  # 2.5小时+
         monthly_active_users="7.3亿"
     ),
     
     Platform.WECHAT: UserPersona(
         platform=Platform.WECHAT,
         demographics=UserDemographics(
-            age_distribution={"25-30": 0.24, "31-35": 0.28, "36-40": 0.22, "40+": 0.26},
+            age_distribution={"25-30": 0.20, "31-40": 0.35, "41-50": 0.30, "50+": 0.15},
             gender_ratio={"男性": 0.48, "女性": 0.52},
-            location_distribution={"一二线城市": 0.70, "其他": 0.30},
-            education_level={"本科及以上": 0.73, "其他": 0.27}
+            location_distribution={"一二线城市": 0.60, "其他": 0.40},
+            education_level={"大专及以上": 0.65, "其他": 0.35}
         ),
         behavior=UserBehavior(
-            interests=["职场焦虑", "财经理财", "情感生活", "育儿教育", "国家政策"],
-            behavior_traits=["深度阅读习惯", "社交压力大", "知识付费意愿", "爱国情怀强烈", "中年危机焦虑"],
-            core_needs=["缓解焦虑", "社会认同", "财富增值", "家庭责任"],
-            consumption_habits=["理性消费", "品质追求", "知识付费", "保险理财"]
+            interests=["权威信息", "健康养生", "家庭教育", "财富保值", "国家大事"],
+            behavior_traits=["权威崇拜", "健康焦虑", "转发分享", "群体认同", "确认偏见"],
+            core_needs=["权威认可", "健康保障", "社会地位", "家庭责任"],
+            consumption_habits=["保健品购买", "保险理财", "教育投资", "权威推荐"],
+            psychological_pain_points=["健康恐慌", "技术焦虑", "社会边缘化", "权威依赖", "信息焦虑"],
+            addiction_patterns=["转发成就感", "群聊参与", "权威信息依赖", "健康信息收集"],
+            social_comparison_triggers=["健康状况", "家庭成就", "社会地位", "财富积累"]
         ),
         content_preferences=ContentPreferences(
             popular_categories={
-                "时事热点": 0.25, "职场成长": 0.20, "情感生活": 0.18, "财经理财": 0.15,
-                "教育育儿": 0.10, "健康养生": 0.07, "科技互联网": 0.05
+                "健康养生": 0.30, "家庭教育": 0.20, "时事政治": 0.15, "财经理财": 0.15,
+                "情感鸡汤": 0.10, "传统文化": 0.05, "科技知识": 0.05
             },
             content_format={
-                "optimal_length": "2000-3000字",
-                "title_style": "悬念式、数字式、反问式",
-                "structure": "总分总、递进式、并列式"
+                "optimal_length": "1500-2500字",
+                "title_style": "权威性、恐慌性、数字化标题",
+                "structure": "权威引用+案例证明+行动建议"
             },
-            engagement_features=["深度分析", "数据支撑", "观点独特", "分享价值"]
+            engagement_features=["权威背书", "健康提醒", "家庭关爱", "转发价值"]
         ),
         stereotypes=PlatformStereotypes(
-            positive_labels=["深度思考", "理性分析", "专业权威", "社会责任感"],
-            negative_labels=["焦虑传播", "标题党", "贩卖焦虑", "民族主义倾向"],
-            creation_dos=["提供深度分析", "数据支撑观点", "缓解中年焦虑", "体现家国情怀"],
-            creation_donts=["过度贩卖焦虑", "缺乏事实依据", "忽视情感需求", "政治敏感话题"]
+            positive_labels=["有责任心", "关爱家人", "社会经验", "传播正能量"],
+            negative_labels=["易信谣言", "焦虑传播", "技术焦虑", "固化思维"],
+            creation_dos=["提供权威依据", "关注健康话题", "强调家庭价值", "缓解中年焦虑"],
+            creation_donts=["挑战权威", "忽视健康", "复杂技术", "制造对立"]
         ),
-        daily_usage_minutes=0,  # 公众号无单独统计
-        monthly_active_users="4亿+"
+        daily_usage_minutes=90,
+        monthly_active_users="12.9亿"
     ),
     
     Platform.XIAOHONGSHU: UserPersona(
@@ -169,31 +179,34 @@ USER_PERSONAS: Dict[Platform, UserPersona] = {
             education_level={"本科及以上": 0.70, "其他": 0.30}
         ),
         behavior=UserBehavior(
-            interests=["美妆时尚", "品质生活", "社交展示", "女性权益", "精致消费"],
-            behavior_traits=["种草决策链短", "视觉导向强", "从众心理", "虚荣心理", "女权意识"],
-            core_needs=["社交认同", "美丽追求", "生活品质", "自我价值实现"],
-            consumption_habits=["冲动消费", "品牌种草", "跟风购买", "精致生活"]
+            interests=["精致消费", "外貌提升", "生活方式", "社交展示", "品牌种草"],
+            behavior_traits=["种草拔草", "精致贫穷", "视觉导向", "社交比较", "消费冲动"],
+            core_needs=["外貌焦虑缓解", "生活方式认同", "消费指导", "社交价值"],
+            consumption_habits=["冲动购买", "品牌跟风", "医美消费", "精致生活投资"],
+            psychological_pain_points=["容貌焦虑", "社交比较压力", "消费主义陷阱", "身份认同困惑", "经济负担"],
+            addiction_patterns=["种草循环", "理想化内容依赖", "消费展示", "社交验证需求"],
+            social_comparison_triggers=["外貌颜值", "生活品质", "消费能力", "社交地位"]
         ),
         content_preferences=ContentPreferences(
             popular_categories={
-                "美妆护肤": 0.28, "穿搭时尚": 0.22, "美食探店": 0.18, "家居生活": 0.12,
-                "旅行攻略": 0.10, "健身瘦身": 0.05, "学习成长": 0.05
+                "美妆护肤": 0.35, "穿搭时尚": 0.25, "生活方式": 0.20, "美食探店": 0.10,
+                "旅行攻略": 0.05, "健身塑形": 0.03, "学习成长": 0.02
             },
             content_format={
-                "image_count": "4-9张高质量配图",
-                "content_style": "真实使用体验+详细步骤教程",
-                "tag_count": "5-10个精准标签"
+                "image_count": "6-9张精修图片",
+                "content_style": "精致生活展示+详细攻略",
+                "tag_count": "8-12个热门标签"
             },
-            engagement_features=["真人体验", "前后对比", "详细教程", "评论区答疑"]
+            engagement_features=["精致视觉", "前后对比", "详细教程", "价格透明"]
         ),
         stereotypes=PlatformStereotypes(
-            positive_labels=["精致生活", "审美品味", "消费能力", "社交活跃"],
-            negative_labels=["虚荣攀比", "跟风从众", "过度滤镜", "女拳倾向"],
-            creation_dos=["展示精致生活", "提供实用价值", "迎合审美需求", "体现女性力量"],
-            creation_donts=["过于商业化", "缺乏真实感", "忽视实用性", "性别对立言论"]
+            positive_labels=["审美品味", "生活精致", "消费理性", "分享精神"],
+            negative_labels=["虚荣攀比", "消费主义", "容貌焦虑", "精致贫穷"],
+            creation_dos=["提供美丽方案", "展示精致生活", "给出消费指导", "缓解外貌焦虑"],
+            creation_donts=["过度滤镜", "不切实际消费", "制造容貌焦虑", "忽视经济现实"]
         ),
-        daily_usage_minutes=0,  # 文档中70%用户每日打开但未提供具体时长
-        monthly_active_users="2.6亿"
+        daily_usage_minutes=85,
+        monthly_active_users="3.2亿"
     )
 }
 

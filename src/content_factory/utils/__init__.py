@@ -13,9 +13,9 @@ from .platform_config import (
 
 from .quality_metrics import (
     calculate_readability_score,
-    calculate_keyword_density,
-    calculate_engagement_potential,
-    calculate_seo_score,
+    calculate_authenticity_score,
+    calculate_psychological_value_score,
+    calculate_actionability_score,
     calculate_platform_adaptation_score,
     evaluate_content_quality,
 )
@@ -30,9 +30,9 @@ __all__ = [
     "get_title_generation_prompt",
     # Quality metrics
     "calculate_readability_score",
-    "calculate_keyword_density",
-    "calculate_engagement_potential",
-    "calculate_seo_score",
+    "calculate_authenticity_score",
+    "calculate_psychological_value_score", 
+    "calculate_actionability_score",
     "calculate_platform_adaptation_score",
     "evaluate_content_quality",
 ]
