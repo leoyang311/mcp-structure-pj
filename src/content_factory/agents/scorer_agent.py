@@ -1,22 +1,28 @@
 """
 Scorer Agent - 内容质量评分和优选
+集成反幻觉评分确保内容准确性
 """
 import asyncio
+import os
 from typing import Any, Dict, List, Tuple
 from datetime import datetime
 
 from .base import BaseAgent
 from ..models import ContentVersion, QualityScore, Platform, ContentType
 from ..utils import evaluate_content_quality
+from ..utils.enhanced_prompts import get_enhanced_scoring_prompt
+from ..utils.anti_hallucination import FactCheckingMixin
 
 
-class ScorerAgent(BaseAgent):
+class ScorerAgent(FactCheckingMixin, BaseAgent):
     """
     评分Agent - 负责对生成的内容进行质量评分和优选
+    集成反幻觉技术确保评分准确性
     """
     
-    def __init__(self, logger=None):
+    def __init__(self, openai_client=None, logger=None):
         super().__init__("scorer_agent", logger)
+        self.openai_client = openai_client
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -32,6 +38,7 @@ class ScorerAgent(BaseAgent):
         Returns:
             Dict[str, Any]: {
                 "quality_scores": Dict[str, QualityScore],
+                "detailed_feedback": Dict[str, Dict[str, List[str]]],
                 "best_versions": Dict[Platform, ContentVersion],
                 "ranking": List[Tuple[ContentVersion, QualityScore]],
                 "status": "completed"
@@ -46,7 +53,7 @@ class ScorerAgent(BaseAgent):
         if not all_versions:
             raise ValueError("No content versions to score")
         
-        self.logger.info(f"Starting quality evaluation for {len(all_versions)} content versions")
+        self.logger.info(f"开始基于心理洞察评估 {len(all_versions)} 个内容版本")
         
         # 并行评分所有版本
         scoring_tasks = [
@@ -58,14 +65,17 @@ class ScorerAgent(BaseAgent):
         
         # 处理评分结果
         quality_scores = {}
+        detailed_feedback = {}
         valid_results = []
         
         for version, result in zip(all_versions, scoring_results):
             if not isinstance(result, Exception):
-                quality_scores[version.version_id] = result
-                valid_results.append((version, result))
+                score, feedback = result
+                quality_scores[version.version_id] = score
+                detailed_feedback[version.version_id] = feedback
+                valid_results.append((version, score))
             else:
-                self.logger.error(f"Failed to score version {version.version_id}: {str(result)}")
+                self.logger.error(f"版本 {version.version_id} 评分失败: {str(result)}")
         
         # 选择最佳版本
         best_versions = self._select_best_versions(valid_results)
@@ -73,10 +83,17 @@ class ScorerAgent(BaseAgent):
         # 创建排名
         ranking = sorted(valid_results, key=lambda x: x[1].total_score, reverse=True)
         
-        self.logger.info(f"Completed scoring {len(valid_results)} versions")
+        self.logger.info(f"评分完成，{len(valid_results)} 个版本已评估")
+        
+        # 输出评分概览
+        if ranking:
+            self.logger.info("=== 评分排名 ===")
+            for i, (version, score) in enumerate(ranking[:3], 1):
+                self.logger.info(f"第{i}名: {version.platform.value} - {score.total_score:.1f}分")
         
         return {
             "quality_scores": quality_scores,
+            "detailed_feedback": detailed_feedback,
             "best_versions": best_versions,
             "ranking": ranking,
             "status": "completed"
@@ -86,9 +103,9 @@ class ScorerAgent(BaseAgent):
         self, 
         version: ContentVersion, 
         research_data=None
-    ) -> QualityScore:
+    ) -> Tuple[QualityScore, Dict[str, List[str]]]:
         """
-        对单个内容版本进行评分
+        对单个内容版本进行评分 - 基于心理洞察
         """
         try:
             # 提取关键词用于评分
@@ -96,30 +113,153 @@ class ScorerAgent(BaseAgent):
             if research_data:
                 keywords = research_data.key_points[:5]
             
-            # 调用质量评估函数
-            quality_score = evaluate_content_quality(
+            # 调用新的质量评估函数，返回评分和详细反馈
+            quality_score, feedback = evaluate_content_quality(
                 text=version.content,
                 title=version.title,
                 platform=version.platform,
                 keywords=keywords
             )
             
-            # 添加额外的平台特定评分
-            await self._apply_platform_specific_scoring(version, quality_score)
+            # 使用AI进行深度内容评估
+            ai_feedback = await self._get_ai_quality_assessment(version, research_data)
             
-            # 添加内容类型特定评分
-            await self._apply_content_type_scoring(version, quality_score)
+            # 整合AI反馈
+            if ai_feedback:
+                feedback["AI专业评估"] = [ai_feedback.get("overall_assessment", "")]
+                
+                # 根据AI评估调整分数
+                ai_score = ai_feedback.get("score_adjustment", 0)
+                if ai_score != 0:
+                    # 调整总分，但不超过100
+                    old_total = quality_score.total_score
+                    quality_score.total_score = max(0, min(100, old_total + ai_score))
+                    feedback["分数调整"] = [f"AI评估调整: {ai_score:+.1f}分 ({old_total:.1f} → {quality_score.total_score:.1f})"]
             
-            # 重新计算总分
-            quality_score.calculate_total()
+            self.logger.info(f"Version {version.version_id} 评分完成: {quality_score.total_score:.1f}分")
             
-            self.logger.debug(f"Scored version {version.version_id}: {quality_score.total_score:.2f}")
+            # 记录详细反馈
+            for category, items in feedback.items():
+                if items:
+                    self.logger.debug(f"  {category}: {'; '.join(items[:2])}")
             
-            return quality_score
+            return quality_score, feedback
             
         except Exception as e:
-            self.logger.error(f"Failed to score content version: {str(e)}")
-            raise
+            self.logger.error(f"内容版本评分失败: {str(e)}")
+            # 返回默认低分和错误信息
+            default_score = QualityScore(
+                content_quality=30,
+                platform_adaptation=30,
+                engagement_potential=30,
+                technical_quality=30,
+                total_score=30
+            )
+            error_feedback = {"错误信息": [str(e)]}
+            return default_score, error_feedback
+    
+    async def _get_ai_quality_assessment(
+        self, 
+        version: ContentVersion, 
+        research_data=None
+    ) -> Dict[str, Any]:
+        """
+        使用AI对内容进行深度评估
+        """
+        if not self.openai_client:
+            return None
+        
+        try:
+            # 获取基于心理洞察的评分提示词
+            from ..utils.enhanced_prompts import get_enhanced_scoring_prompt
+            scoring_prompt = get_enhanced_scoring_prompt()
+            
+            # 构建评估消息
+            assessment_message = f"""
+{scoring_prompt}
+
+请评估以下内容：
+
+## 基本信息
+- 平台: {version.platform.value}
+- 标题: {version.title}
+- 内容类型: {version.content_type.value}
+
+## 内容正文
+{version.content}
+
+## 研究背景
+{research_data.summary if research_data else "无研究背景数据"}
+
+请从以下维度进行评估：
+1. 真实性检查（是否有AI套话？）
+2. 心理价值（是否击中用户痛点？）
+3. 平台适配度（是否符合平台特征？）
+4. 内容价值（是否提供实用信息？）
+5. 传播潜力（是否有分享转发动机？）
+
+请给出：
+- 详细评估分析（200字内）
+- 分数调整建议（-10到+10分之间）
+- 具体改进建议（3条内）
+
+输出格式：
+```json
+{{
+    "overall_assessment": "详细评估分析",
+    "score_adjustment": 调整分数,
+    "improvement_suggestions": ["建议1", "建议2", "建议3"],
+    "strengths": ["优点1", "优点2"],
+    "weaknesses": ["问题1", "问题2"]
+}}
+```
+"""
+            
+            # 调用LLM进行评估
+            model_name = os.getenv("SCORER_MODEL", "gpt-4o-mini")
+            response = self.openai_client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的内容质量评估专家，基于心理学洞察和平台特征进行精准评估。"},
+                    {"role": "user", "content": assessment_message}
+                ],
+                temperature=0.3,
+                max_tokens=800
+            )
+            
+            # 解析响应
+            response_text = response.choices[0].message.content.strip()
+            
+            # 尝试提取JSON部分
+            import json
+            import re
+            
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    ai_feedback = json.loads(json_match.group(1))
+                    self.logger.debug(f"AI评估完成: {ai_feedback.get('score_adjustment', 0):+.1f}分调整")
+                    return ai_feedback
+                except json.JSONDecodeError:
+                    self.logger.warning("AI评估响应JSON解析失败")
+            
+            # 如果没有找到JSON，尝试直接解析整个响应
+            try:
+                ai_feedback = json.loads(response_text)
+                return ai_feedback
+            except json.JSONDecodeError:
+                self.logger.warning("AI评估响应格式无效，使用文本分析")
+                return {
+                    "overall_assessment": response_text[:200],
+                    "score_adjustment": 0,
+                    "improvement_suggestions": ["需要重新评估"],
+                    "strengths": [],
+                    "weaknesses": []
+                }
+        
+        except Exception as e:
+            self.logger.error(f"AI质量评估失败: {str(e)}")
+            return None
     
     async def _apply_platform_specific_scoring(
         self, 

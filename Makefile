@@ -58,3 +58,18 @@ setup: check-env docker-up dev-install
 # Full demo
 full-demo: setup demo
 	@echo "Demo complete ✓"
+
+# Anti-hallucination demo
+anti-hallucination-demo: setup
+	uv run python demo_anti_hallucination.py
+
+# Show anti-hallucination features
+show-features:
+	@echo "🛡️ FastMCP Anti-Hallucination Features:"
+	@echo "✅ Iterative fact verification through multiple searches"
+	@echo "✅ Mandatory source citation with specific URLs and dates"
+	@echo "✅ Cross-referencing claims across multiple sources"
+	@echo "✅ Confidence level indicators for all statements"
+	@echo "✅ Transparent reasoning and uncertainty acknowledgment"
+	@echo "✅ Entity precision with exact data and measurements"
+	@echo "✅ Verification protocols based on Deep Research methodology"

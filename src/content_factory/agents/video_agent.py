@@ -16,9 +16,9 @@ class VideoAgent(BaseAgent):
     视频Agent - 负责生成视频脚本和相关内容
     """
     
-    def __init__(self, llm_client=None, logger=None):
+    def __init__(self, openai_client=None, logger=None):
         super().__init__("video_agent", logger)
-        self.llm_client = llm_client
+        self.openai_client = openai_client
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
