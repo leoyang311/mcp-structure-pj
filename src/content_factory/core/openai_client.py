@@ -3,8 +3,11 @@ OpenAI Client Configuration
 支持OpenAI API和兼容接口
 """
 import os
+import logging
 from openai import OpenAI
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def get_openai_client(api_key: Optional[str] = None, base_url: Optional[str] = None) -> OpenAI:
@@ -21,16 +24,30 @@ def get_openai_client(api_key: Optional[str] = None, base_url: Optional[str] = N
     """
     # 获取API密钥
     if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        api_key = (
+            os.getenv("OPENAI_API_KEY") or 
+            os.getenv("YUNWU_API_KEY") or 
+            os.getenv("OPENROUTER_API_KEY")
+        )
     
     if not api_key:
-        raise ValueError("未找到API密钥，请设置OPENAI_API_KEY或OPENROUTER_API_KEY环境变量")
+        raise ValueError("未找到API密钥，请设置OPENAI_API_KEY、YUNWU_API_KEY或OPENROUTER_API_KEY环境变量")
     
     # 获取基础URL
     if not base_url:
-        base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENROUTER_BASE_URL")
-        if not base_url and os.getenv("OPENROUTER_API_KEY"):
-            base_url = "https://openrouter.ai/api/v1"
+        base_url = (
+            os.getenv("OPENAI_API_BASE") or 
+            os.getenv("OPENAI_BASE_URL") or 
+            os.getenv("YUNWU_BASE_URL") or 
+            os.getenv("OPENROUTER_BASE_URL")
+        )
+        
+        # 根据API密钥前缀推断服务商
+        if not base_url and api_key:
+            if api_key.startswith("sk-6MT0V7g6") or "yunwu" in api_key.lower():
+                base_url = "https://yunwu.ai/v1"
+            elif os.getenv("OPENROUTER_API_KEY"):
+                base_url = "https://openrouter.ai/api/v1"
     
     # 创建客户端
     client = OpenAI(
@@ -48,10 +65,20 @@ def get_default_model() -> str:
     Returns:
         str: 模型名称
     """
+    # 优先使用环境变量中指定的模型
+    model = os.getenv("OPENAI_MODEL")
+    if model:
+        return model
+    
+    # 检查是否使用云雾API
+    if "yunwu.ai" in (os.getenv("OPENAI_API_BASE", "") or ""):
+        return "qwen3-235b-a22b-think"  # 云雾API默认使用Qwen3思考模型
+    
+    # 检查是否使用OpenRouter
     if os.getenv("OPENROUTER_API_KEY"):
         return os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
     else:
-        return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        return "gpt-4o-mini"  # OpenAI默认模型
 
 
 def test_client_connection(client: OpenAI) -> bool:
@@ -74,7 +101,7 @@ def test_client_connection(client: OpenAI) -> bool:
         return bool(response.choices[0].message.content)
         
     except Exception as e:
-        print(f"❌ OpenAI客户端连接测试失败: {e}")
+        logger.error(f"OpenAI客户端连接测试失败: {e}")
         return False
 
 
@@ -96,7 +123,7 @@ def get_global_client() -> OpenAI:
         
         # 测试连接
         if not test_client_connection(_global_client):
-            print("⚠️ OpenAI客户端连接可能有问题，但仍继续使用")
+            logger.warning("OpenAI客户端连接可能有问题，但仍继续使用")
     
     return _global_client
 

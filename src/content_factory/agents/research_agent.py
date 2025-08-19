@@ -3,6 +3,7 @@ Research Agent - 话题研究和信息收集
 集成反幻觉技术确保研究准确性
 """
 import json
+import os
 import asyncio
 import aiohttp
 from typing import Any, Dict, List
@@ -250,8 +251,9 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
 
 要求：客观分析，内容准确，语言专业，字数800-1200字。
 """
+                model_name = os.getenv("RESEARCH_MODEL", "gpt-3.5-turbo")
                 response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model=model_name,
                     messages=[
                         {"role": "system", "content": "你是一个专业的研究分析师，擅长基于数据生成深入、客观的研究总结。"},
                         {"role": "user", "content": prompt}

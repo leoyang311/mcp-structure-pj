@@ -410,17 +410,11 @@ def example_enhanced_prompt_usage():
     # 生成微信公众号提示词
     wechat_prompt = get_enhanced_content_generation_prompt(Platform.WECHAT, mock_research)
     
-    print("📝 增强版微信公众号提示词已生成")
-    print(f"提示词长度: {len(wechat_prompt)} 字符")
-    
     # 质量验证
     enforcer = ContentQualityEnforcer()
     sample_content = "小米SU7在2024年11月28日的产能数据显示，日产量仅280辆，相比特斯拉上海工厂的2000辆日产能差距巨大。"
     
     validation = enforcer.validate_content(sample_content, "小米SU7产能分析")
-    print(f"\n📊 内容质量检查: {'通过' if validation['passed'] else '不通过'}")
-    print(f"质量评分: {validation['score']:.2f}")
-    print(f"质量等级: {validation['grade']}")
 
 if __name__ == "__main__":
     example_enhanced_prompt_usage()

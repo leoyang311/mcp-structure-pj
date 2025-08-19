@@ -2,7 +2,7 @@
 Master控制器 - 系统的核心调度器
 """
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import logging
 from datetime import datetime
 import uuid
@@ -10,7 +10,9 @@ import uuid
 from .task_manager import TaskManager
 from .content_pipeline import ContentPipeline
 from ..models import ContentTask, TaskStatus, Platform
-from ..agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
+
+if TYPE_CHECKING:
+    from ..agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
 
 
 class MasterController:
@@ -62,23 +64,27 @@ class MasterController:
             video_config = configs.get("video_agent", {})
             scorer_config = configs.get("scorer_agent", {})
             
-            # 初始化Agent，传递OpenAI客户端
+            # 初始化Agent，传递OpenAI客户端（延迟导入以避免循环依赖）
+            from ..agents.research_agent import ResearchAgent
             self.research_agent = ResearchAgent(
                 openai_client=openai_client,
                 search_api_key=research_config.get("search_api_key"),
                 logger=self.logger
             )
             
+            from ..agents.writer_agent import WriterAgent
             self.writer_agent = WriterAgent(
                 openai_client=openai_client,
                 logger=self.logger
             )
             
+            from ..agents.video_agent import VideoAgent
             self.video_agent = VideoAgent(
                 openai_client=openai_client,
                 logger=self.logger
             )
             
+            from ..agents.scorer_agent import ScorerAgent
             self.scorer_agent = ScorerAgent(
                 openai_client=openai_client,
                 logger=self.logger

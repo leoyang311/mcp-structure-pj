@@ -3,6 +3,7 @@ Scorer Agent - 内容质量评分和优选
 集成反幻觉评分确保内容准确性
 """
 import asyncio
+import os
 from typing import Any, Dict, List, Tuple
 from datetime import datetime
 
@@ -215,8 +216,9 @@ class ScorerAgent(FactCheckingMixin, BaseAgent):
 """
             
             # 调用LLM进行评估
+            model_name = os.getenv("SCORER_MODEL", "gpt-4o-mini")
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=[
                     {"role": "system", "content": "你是一个专业的内容质量评估专家，基于心理学洞察和平台特征进行精准评估。"},
                     {"role": "user", "content": assessment_message}

@@ -3,19 +3,21 @@ Enhanced Writer Agent - 集成深度研究引擎和CASE框架
 解决AI味、模板化、信息密度低等问题
 """
 import asyncio
+import os
 from typing import Dict, Any, List, Optional
 import uuid
 from datetime import datetime
 
 from .base import BaseAgent
 from ..models import ContentVersion, Platform, ContentType, ResearchData
-from ..core.openai_client import get_openai_client
+from ..core.openai_client import get_openai_client, get_default_model
 from ..engines.deep_research_engine import DeepResearchEngine, StructuredResearch
 from ..prompts.case_framework_prompts import (
     get_enhanced_content_generation_prompt,
     ContentQualityEnforcer
 )
 from ..utils.anti_hallucination import FactCheckingMixin
+from ..core.anti_censorship_system import AntiCensorshipContentGenerator, CensorshipLevel
 
 
 class WriterAgent(FactCheckingMixin, BaseAgent):
@@ -29,7 +31,8 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
         self.openai_client = openai_client or get_openai_client()
         self.deep_research_engine = DeepResearchEngine()
         self.quality_enforcer = ContentQualityEnforcer()
-        self.logger.info("✅ Enhanced WriterAgent初始化完成 - 已集成深度研究引擎")
+        self.anti_censorship_generator = AntiCensorshipContentGenerator()
+        self.logger.info("✅ Enhanced WriterAgent初始化完成 - 已集成深度研究引擎和反审查系统")
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -271,9 +274,10 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             try:
                 self.logger.info(f"🔄 第{attempt + 1}次尝试生成{platform.value}内容...")
                 
-                # 调用LLM生成内容
+                # 调用LLM生成内容 - 使用环境变量配置的模型
+                model_name = os.getenv("WRITER_MODEL", get_default_model())
                 response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=model_name,
                     messages=[
                         {
                             "role": "system",
@@ -336,8 +340,9 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
 只返回一个最佳标题，不需要其他内容。
 """
             
+            model_name = os.getenv("WRITER_MODEL", get_default_model())
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=[
                     {"role": "system", "content": "你是标题优化专家，生成精准、有吸引力的标题。"},
                     {"role": "user", "content": title_prompt}
@@ -374,7 +379,7 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
     
     # 实现FactCheckingMixin接口
     async def _generate_initial_content(self, prompt: str, platform: str, research_data: Dict) -> str:
-        """生成初始内容 - 兼容接口"""
+        """生成初始内容 - 集成反审查机制"""
         try:
             platform_enum = Platform(platform.lower()) if isinstance(platform, str) else Platform.WECHAT
             research_obj = ResearchData.from_dict(research_data) if isinstance(research_data, dict) else research_data
@@ -382,11 +387,53 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             enhanced_research = await self._conduct_deep_research(research_obj)
             case_prompt = get_enhanced_content_generation_prompt(platform_enum, enhanced_research)
             
+            # 构建完整提示词
+            full_prompt = f"{prompt}\n\n{case_prompt}"
+            
+            # 使用反审查系统生成内容
+            result = self.anti_censorship_generator.generate_content(
+                prompt=full_prompt,
+                topic=research_obj.topic,
+                expected_length=self._get_expected_length(platform_enum),
+                preferred_model="qwen3"
+            )
+            
+            # 记录反审查结果
+            if result["switches_made"]:
+                self.logger.warning(f"🔄 模型切换: {result['switches_made']}")
+            
+            if not result["success"]:
+                self.logger.error(f"❌ 反审查生成失败，使用降级策略")
+                # 降级到原有方法
+                return await self._fallback_generate_content(full_prompt)
+            
+            self.logger.info(f"✅ 内容生成成功，使用模型: {result['model_used']}")
+            return result["final_content"]
+            
+        except Exception as e:
+            self.logger.error(f"❌ 生成初始内容失败: {e}")
+            return f"内容生成失败: {str(e)}"
+    
+    def _get_expected_length(self, platform: Platform) -> int:
+        """获取平台期望的内容长度"""
+        length_map = {
+            Platform.WECHAT: 2000,
+            Platform.XIAOHONGSHU: 1000,
+            Platform.BILIBILI: 1500,
+            Platform.DOUYIN: 500,
+            Platform.ZHIHU: 2500
+        }
+        return length_map.get(platform, 1500)
+    
+    async def _fallback_generate_content(self, prompt: str) -> str:
+        """降级内容生成方法（当反审查系统失败时使用）"""
+        try:
+            model_name = os.getenv("WRITER_MODEL", get_default_model())
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=[
                     {"role": "system", "content": "专业内容创作专家"},
-                    {"role": "user", "content": f"{prompt}\n\n{case_prompt}"}
+                    {"role": "user", "content": prompt}
                 ],
                 max_tokens=2000,
                 temperature=0.3
@@ -395,5 +442,5 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             return response.choices[0].message.content.strip()
             
         except Exception as e:
-            self.logger.error(f"❌ 生成初始内容失败: {e}")
-            return f"内容生成失败: {str(e)}"
+            self.logger.error(f"❌ 降级生成也失败: {e}")
+            return "内容生成完全失败，请检查系统配置"

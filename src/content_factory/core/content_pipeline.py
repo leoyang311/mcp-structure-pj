@@ -2,11 +2,12 @@
 内容生产流水线 - 协调各个Agent执行完整的内容生产流程
 """
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 import logging
 import time
 
-from ..agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
+if TYPE_CHECKING:
+    from ..agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
 from ..models import ContentTask, TaskResult, TaskStatus
 
 
@@ -18,19 +19,38 @@ class ContentPipeline:
     
     def __init__(
         self,
-        research_agent: Optional[ResearchAgent] = None,
-        writer_agent: Optional[WriterAgent] = None,
-        video_agent: Optional[VideoAgent] = None,
-        scorer_agent: Optional[ScorerAgent] = None,
+        research_agent: Optional["ResearchAgent"] = None,
+        writer_agent: Optional["WriterAgent"] = None,
+        video_agent: Optional["VideoAgent"] = None,
+        scorer_agent: Optional["ScorerAgent"] = None,
         logger: Optional[logging.Logger] = None
     ):
         self.logger = logger or logging.getLogger("content_pipeline")
         
-        # 初始化各个Agent
-        self.research_agent = research_agent or ResearchAgent(logger=self.logger)
-        self.writer_agent = writer_agent or WriterAgent(logger=self.logger)
-        self.video_agent = video_agent or VideoAgent(logger=self.logger)
-        self.scorer_agent = scorer_agent or ScorerAgent(logger=self.logger)
+        # 初始化各个Agent (延迟导入以避免循环依赖)
+        if research_agent is None:
+            from ..agents.research_agent import ResearchAgent
+            self.research_agent = ResearchAgent(logger=self.logger)
+        else:
+            self.research_agent = research_agent
+            
+        if writer_agent is None:
+            from ..agents.writer_agent import WriterAgent
+            self.writer_agent = WriterAgent(logger=self.logger)
+        else:
+            self.writer_agent = writer_agent
+            
+        if video_agent is None:
+            from ..agents.video_agent import VideoAgent
+            self.video_agent = VideoAgent(logger=self.logger)
+        else:
+            self.video_agent = video_agent
+            
+        if scorer_agent is None:
+            from ..agents.scorer_agent import ScorerAgent
+            self.scorer_agent = ScorerAgent(logger=self.logger)
+        else:
+            self.scorer_agent = scorer_agent
     
     async def execute(
         self, 
