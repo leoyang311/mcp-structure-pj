@@ -61,20 +61,20 @@ cp .env.example .env
 
 ### 基础使用
 ```python
-from src.content_factory.core.anti_censorship_system import AntiCensorshipGenerator
+from src.content_factory.core.anti_censorship_system import AntiCensorshipContentGenerator
 
 # 初始化生成器
-generator = AntiCensorshipGenerator()
+generator = AntiCensorshipContentGenerator()
 
-# 生成内容（带反审查机制）
-result = generator.generate_with_fallback(
+# 生成内容（带反审查检测与自动切换）
+result = generator.generate_content(
     prompt="你的内容提示",
     topic="话题名称",
-    platform="目标平台"
+    expected_length=1500  # 可选，用于长度与质量检测
 )
 
-print(f"使用模型: {result['model_used']}")
-print(f"内容: {result['final_content']}")
+print(f"使用模型: {result.get('model_used')}")
+print(f"内容: {result.get('final_content')[:200]}...")
 ```
 
 ### 高级测试
