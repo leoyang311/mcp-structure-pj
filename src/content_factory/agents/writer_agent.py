@@ -1,6 +1,6 @@
 """
 Enhanced Writer Agent - 集成深度研究引擎和CASE框架
-解决AI味、模板化、信息密度低等问题
+使用结构化输出一次性生成标题+正文，减少 LLM 调用次数
 """
 import asyncio
 import os
@@ -8,9 +8,11 @@ from typing import Dict, Any, List, Optional
 import uuid
 from datetime import datetime
 
+from pydantic import BaseModel, Field
+
 from .base import BaseAgent
 from ..models import ContentVersion, Platform, ContentType, ResearchData
-from ..core.openai_client import get_openai_client, get_default_model
+from ..core.openai_client import get_openai_client, get_async_client, get_default_model, structured_completion
 from ..engines.deep_research_engine import DeepResearchEngine, StructuredResearch
 from ..prompts.case_framework_prompts import (
     get_enhanced_content_generation_prompt,
@@ -18,6 +20,13 @@ from ..prompts.case_framework_prompts import (
 )
 from ..utils.anti_hallucination import FactCheckingMixin
 from ..core.anti_censorship_system import AntiCensorshipContentGenerator, CensorshipLevel
+
+
+# ── 结构化输出模型 ──────────────────────────────────────────────────────────────
+
+class ArticleOutput(BaseModel):
+    title: str = Field(description="文章标题，20字以内，必须包含具体数据或关键词")
+    content: str = Field(description="正文内容，严格遵循CASE框架，禁止模糊表达")
 
 
 class WriterAgent(FactCheckingMixin, BaseAgent):
@@ -29,10 +38,16 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
     def __init__(self, openai_client=None, logger=None):
         super().__init__("enhanced_writer_agent", logger)
         self.openai_client = openai_client or get_openai_client()
+        self._async_client = None  # 延迟初始化异步客户端
         self.deep_research_engine = DeepResearchEngine()
         self.quality_enforcer = ContentQualityEnforcer()
         self.anti_censorship_generator = AntiCensorshipContentGenerator()
         self.logger.info("✅ Enhanced WriterAgent初始化完成 - 已集成深度研究引擎和反审查系统")
+
+    def _get_async_client(self):
+        if self._async_client is None:
+            self._async_client = get_async_client()
+        return self._async_client
     
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -109,7 +124,10 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
                             "specific_data_count": version.metadata.get("specific_data_count", 0)
                         }
                 
-                self.logger.info(f"✅ {platform_enum.value}内容生成完成 - 质量评分: {version.metadata.get('quality_score', 0):.2f}")
+                if version:
+                    self.logger.info(f"✅ {platform_enum.value}内容生成完成 - 质量评分: {version.metadata.get('quality_score', 0):.2f}")
+                else:
+                    self.logger.warning(f"⚠️ {platform_enum.value}内容生成返回空结果")
                 
             except Exception as e:
                 self.logger.error(f"❌ {platform_enum.value}内容生成失败: {e}")
@@ -403,59 +421,52 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
         )
     
     async def _generate_enhanced_content_version(
-        self, 
-        enhanced_research: StructuredResearch, 
-        platform: Platform, 
+        self,
+        enhanced_research: StructuredResearch,
+        platform: Platform,
         version_num: int,
-        topic_str: str
+        topic_str: str,
     ) -> Optional[ContentVersion]:
-        """生成增强版内容"""
+        """
+        生成增强版内容 - 使用结构化输出一次调用同时生成标题和正文
+        相比原版减少 1 次 LLM 调用，并通过 Pydantic 保证字段完整性
+        """
         try:
-            # Step 1: 生成CASE框架提示词
+            # Step 1: 构建 CASE 框架提示词
             case_prompt = get_enhanced_content_generation_prompt(platform, enhanced_research)
-            
-            # Step 2: 构建完整提示词
             full_prompt = self._build_complete_prompt(enhanced_research, platform, case_prompt)
-            
-            # Step 3: 生成内容（带质量控制重试）
-            content_result = await self._generate_with_quality_control(
+
+            # Step 2: 结构化输出（带质量控制重试）
+            article, quality_metrics = await self._generate_structured_article(
                 full_prompt, topic_str, platform
             )
-            
-            if not content_result["success"]:
-                self.logger.error(f"❌ {platform.value}内容质量控制失败")
+
+            if article is None:
+                self.logger.error(f"❌ {platform.value}内容生成失败")
                 return None
-            
-            content = content_result["content"]
-            quality_metrics = content_result["quality_metrics"]
-            
-            # Step 4: 生成标题
-            title = await self._generate_enhanced_title(enhanced_research, platform, topic_str)
-            
-            # Step 5: 创建内容版本
-            version = ContentVersion(
+
+            # Step 3: 创建内容版本
+            return ContentVersion(
                 version_id=str(uuid.uuid4()),
                 platform=platform,
                 content_type=ContentType.ARTICLE,
-                title=title,
-                content=content,
+                title=article.title,
+                content=article.content,
                 metadata={
                     "version_number": version_num,
-                    "word_count": len(content.replace(' ', '').replace('\n', '')),
+                    "word_count": len(article.content.replace(" ", "").replace("\n", "")),
                     "generated_at": datetime.now().isoformat(),
                     "research_topic": (topic_str[:50] + "...") if topic_str else "",
                     "research_confidence": enhanced_research.confidence_score,
-                    "information_density": quality_metrics["total_density_score"],
-                    "case_compliance": quality_metrics["case_compliance"],
-                    "quality_score": quality_metrics["total_density_score"],
-                    "specific_data_count": quality_metrics["specific_data_count"],
-                    "quality_grade": quality_metrics["grade"]
+                    "information_density": quality_metrics.get("total_density_score", 0),
+                    "case_compliance": quality_metrics.get("case_compliance", 0),
+                    "quality_score": quality_metrics.get("total_density_score", 0),
+                    "specific_data_count": quality_metrics.get("specific_data_count", 0),
+                    "quality_grade": quality_metrics.get("grade", "C"),
                 },
-                created_at=datetime.now()
+                created_at=datetime.now(),
             )
-            
-            return version
-            
+
         except Exception as e:
             self.logger.error(f"❌ 生成{platform.value}内容版本失败: {e}")
             return None
@@ -487,104 +498,62 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
 禁止使用任何模糊表达，如"据了解"、"相关人士"、"大约"等。
 """
     
-    async def _generate_with_quality_control(
-        self, 
-        prompt: str, 
-        topic: str, 
-        platform: Platform, 
-        max_retries: int = 3
-    ) -> Dict[str, Any]:
-        """带质量控制的内容生成"""
-        
+    async def _generate_structured_article(
+        self,
+        prompt: str,
+        topic: str,
+        platform: Platform,
+        max_retries: int = 3,
+    ) -> tuple[Optional[ArticleOutput], Dict]:
+        """
+        结构化输出版内容生成：标题 + 正文一次调用完成，带质量控制重试
+        返回 (ArticleOutput | None, quality_metrics)
+        """
+        client = self._get_async_client()
+        model_name = os.getenv("WRITER_MODEL", get_default_model())
+        current_prompt = prompt
+
         for attempt in range(max_retries):
+            self.logger.info(f"🔄 第{attempt + 1}次生成{platform.value}内容（结构化输出）...")
             try:
-                self.logger.info(f"🔄 第{attempt + 1}次尝试生成{platform.value}内容...")
-                
-                # 调用LLM生成内容 - 使用环境变量配置的模型
-                model_name = os.getenv("WRITER_MODEL", get_default_model())
-                response = self.openai_client.chat.completions.create(
+                article = await structured_completion(
+                    client=client,
                     model=model_name,
                     messages=[
                         {
                             "role": "system",
-                            "content": "你是专业内容创作专家，严格遵循CASE框架，生成高信息密度、零AI味的内容。绝对禁止空话、套话、模板化表达。"
+                            "content": (
+                                "你是专业内容创作专家，严格遵循CASE框架，生成高信息密度、零AI味的内容。"
+                                "绝对禁止空话、套话、模板化表达。title 字段20字以内，content 字段为完整正文。"
+                            ),
                         },
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": current_prompt},
                     ],
-                    max_tokens=3000,
-                    temperature=0.2  # 低随机性保证质量稳定
+                    response_model=ArticleOutput,
+                    temperature=0.2,
+                    max_tokens=3200,
                 )
-                
-                content = response.choices[0].message.content.strip()
-                
+
                 # 质量验证
-                validation = self.quality_enforcer.validate_content(content, topic)
-                
+                validation = self.quality_enforcer.validate_content(article.content, topic)
                 if validation["passed"]:
                     self.logger.info(f"✅ 内容质量合格 - 评分: {validation['score']:.2f}")
-                    return {
-                        "success": True,
-                        "content": content,
-                        "quality_metrics": validation["metrics"]
-                    }
+                    return article, validation["metrics"]
+
+                issues = ", ".join(validation["issues"][:2])
+                self.logger.warning(f"⚠️ 第{attempt + 1}次质量不达标: {issues}")
+                if attempt < max_retries - 1:
+                    current_prompt += f"\n\n⚠️ 上次问题: {issues}，请严格改正后重新生成。"
                 else:
-                    self.logger.warning(f"⚠️ 第{attempt + 1}次质量不达标: {', '.join(validation['issues'][:2])}")
-                    
-                    if attempt < max_retries - 1:
-                        # 增强提示词要求改进
-                        prompt += f"\n\n⚠️ 上次内容存在问题: {', '.join(validation['issues'][:2])}，请严格改正并重新生成。"
-                    else:
-                        # 最后一次尝试，返回当前结果
-                        return {
-                            "success": False,
-                            "content": content,
-                            "quality_metrics": validation["metrics"],
-                            "issues": validation["issues"]
-                        }
-                        
+                    # 最后一次，接受当前结果
+                    return article, validation["metrics"]
+
             except Exception as e:
                 self.logger.error(f"❌ 第{attempt + 1}次生成失败: {e}")
                 if attempt == max_retries - 1:
-                    return {"success": False, "error": str(e)}
-        
-        return {"success": False, "error": "达到最大重试次数"}
-    
-    async def _generate_enhanced_title(self, research: StructuredResearch, platform: Platform, topic_str: str) -> str:
-        """生成增强版标题"""
-        try:
-            topic = topic_str[:30] + "..." if topic_str else "深度话题"
-            
-            title_prompt = f"""
-请为{platform.value}平台生成一个吸引人的标题，主题是：{topic}
+                    return None, {}
 
-要求：
-1. 必须包含具体数据或关键词
-2. 符合{platform.value}平台的内容调性
-3. 避免标题党，但要有吸引力
-4. 20字以内
-
-只返回一个最佳标题，不需要其他内容。
-"""
-            
-            model_name = os.getenv("WRITER_MODEL", get_default_model())
-            response = self.openai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "你是标题优化专家，生成精准、有吸引力的标题。"},
-                    {"role": "user", "content": title_prompt}
-                ],
-                max_tokens=100,
-                temperature=0.3
-            )
-            
-            title = response.choices[0].message.content.strip()
-            return title if title else f"【深度】{topic}"
-            
-        except Exception as e:
-            self.logger.error(f"❌ 标题生成失败: {e}")
-            # 回退标题
-            topic_short = topic_str[:20] if topic_str else "热门话题"
-            return f"【{platform.value}深度】{topic_short}"
+        return None, {}
     
     def _create_error_version(self, research_data: ResearchData, platform: Platform, error_msg: str) -> ContentVersion:
         """创建错误版本"""
