@@ -375,9 +375,16 @@ class AntiCensorshipContentGenerator:
                 if attempt < self.max_retries:
                     current_model = self.switcher.get_backup_model(current_model)
                 else:
-                    results["error"] = str(e)
-                    break
-        
+                    raise RuntimeError(
+                        f"所有模型均生成失败（已尝试 {self.max_retries + 1} 次）: {e}"
+                    ) from e
+
+        if not results["success"]:
+            raise RuntimeError(
+                f"内容生成失败：经过 {self.max_retries + 1} 次重试仍未通过审查检测。"
+                f"触发器: {results['detection_results'][-1]['detection'].triggers if results['detection_results'] else '未知'}"
+            )
+
         return results
     
     def _generate_with_model(self, prompt: str, model: str) -> str:
@@ -453,8 +460,23 @@ class AntiCensorshipContentGenerator:
     
     def _call_openai_api(self, prompt: str, config: Dict) -> str:
         """调用OpenAI API"""
-        # 实现OpenAI API调用
-        pass
+        from openai import OpenAI
+
+        api_key = config.get("api_key")
+        if not api_key:
+            raise ValueError("OpenAI API key not configured (OPENAI_API_KEY)")
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=config.get("api_base", "https://api.openai.com/v1"),
+        )
+        response = client.chat.completions.create(
+            model=config.get("model_name", "gpt-4-turbo"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=3000,
+        )
+        return response.choices[0].message.content
 
 # 配置文件生成
 def generate_config_template():

@@ -14,6 +14,7 @@ from .base import BaseAgent
 from ..models import ContentVersion, Platform, ContentType, ResearchData
 from ..core.openai_client import get_openai_client, get_async_client, get_default_model, structured_completion
 from ..engines.deep_research_engine import DeepResearchEngine, StructuredResearch
+from ..engines.rag_engine import RAGEngine
 from ..prompts.case_framework_prompts import (
     get_enhanced_content_generation_prompt,
     ContentQualityEnforcer
@@ -42,6 +43,7 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
         self.deep_research_engine = DeepResearchEngine()
         self.quality_enforcer = ContentQualityEnforcer()
         self.anti_censorship_generator = AntiCensorshipContentGenerator()
+        self.rag_engine = RAGEngine()  # 与 ResearchAgent 共享同一持久化路径
         self.logger.info("✅ Enhanced WriterAgent初始化完成 - 已集成深度研究引擎和反审查系统")
 
     def _get_async_client(self):
@@ -94,46 +96,36 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             
             self.logger.info(f"📝 正在为{platform_enum.value}平台生成内容...")
             
-            try:
-                # Step 1: 深度研究增强
-                enhanced_research = await self._conduct_deep_research(research_data)
-                
-                if video_prompt_mode:
-                    # Step 2 (视频提示词模式)：生成视频生成器Prompt
-                    version = await self._generate_video_prompt_version(
-                        enhanced_research=enhanced_research,
-                        platform=platform_enum,
-                        version_num=1,
-                        topic_str=research_data.topic,
-                        engine=video_prompt_engine,
-                        duration_seconds=video_prompt_duration,
-                    )
-                else:
-                    # Step 2（默认）：生成高质量文章版本
-                    version = await self._generate_enhanced_content_version(
-                        enhanced_research, platform_enum, 1, research_data.topic
-                    )
-                
-                if version:
-                    content_versions.append(version)
-                    if not video_prompt_mode:
-                        quality_metrics[platform_enum.value] = {
-                            "information_density": version.metadata.get("information_density", 0),
-                            "case_compliance": version.metadata.get("case_compliance", 0),
-                            "quality_score": version.metadata.get("quality_score", 0),
-                            "specific_data_count": version.metadata.get("specific_data_count", 0)
-                        }
-                
-                if version:
-                    self.logger.info(f"✅ {platform_enum.value}内容生成完成 - 质量评分: {version.metadata.get('quality_score', 0):.2f}")
-                else:
-                    self.logger.warning(f"⚠️ {platform_enum.value}内容生成返回空结果")
-                
-            except Exception as e:
-                self.logger.error(f"❌ {platform_enum.value}内容生成失败: {e}")
-                # 创建错误版本
-                error_version = self._create_error_version(research_data, platform_enum, str(e))
-                content_versions.append(error_version)
+            # Step 1: 深度研究增强
+            enhanced_research = await self._conduct_deep_research(research_data)
+
+            if video_prompt_mode:
+                # Step 2 (视频提示词模式)：生成视频生成器Prompt
+                version = await self._generate_video_prompt_version(
+                    enhanced_research=enhanced_research,
+                    platform=platform_enum,
+                    version_num=1,
+                    topic_str=research_data.topic,
+                    engine=video_prompt_engine,
+                    duration_seconds=video_prompt_duration,
+                )
+            else:
+                # Step 2（默认）：生成高质量文章版本
+                version = await self._generate_enhanced_content_version(
+                    enhanced_research, platform_enum, 1, research_data.topic
+                )
+
+            content_versions.append(version)
+            if not video_prompt_mode:
+                quality_metrics[platform_enum.value] = {
+                    "information_density": version.metadata.get("information_density", 0),
+                    "case_compliance": version.metadata.get("case_compliance", 0),
+                    "quality_score": version.metadata.get("quality_score", 0),
+                    "specific_data_count": version.metadata.get("specific_data_count", 0),
+                }
+            self.logger.info(
+                f"✅ {platform_enum.value}内容生成完成 - 质量评分: {version.metadata.get('quality_score', 0):.2f}"
+            )
         
         self.logger.info(f"🎉 内容生成完成 - 共生成{len(content_versions)}个高质量版本")
         
@@ -432,11 +424,24 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
         相比原版减少 1 次 LLM 调用，并通过 Pydantic 保证字段完整性
         """
         try:
-            # Step 1: 构建 CASE 框架提示词
-            case_prompt = get_enhanced_content_generation_prompt(platform, enhanced_research)
-            full_prompt = self._build_complete_prompt(enhanced_research, platform, case_prompt)
+            # Step 1: RAG检索 - 获取与话题最相关的原始来源段落
+            rag_chunks = []
+            if self.rag_engine.available:
+                rag_chunks = self.rag_engine.retrieve_context(
+                    query=f"{topic_str} {platform.value}",
+                    n_results=6,
+                    min_similarity=0.3,
+                )
+                if rag_chunks:
+                    self.logger.info(f"🔍 RAG检索到 {len(rag_chunks)} 个相关段落")
 
-            # Step 2: 结构化输出（带质量控制重试）
+            # Step 2: 构建 CASE 框架提示词（注入 RAG 来源段落）
+            case_prompt = get_enhanced_content_generation_prompt(platform, enhanced_research)
+            full_prompt = self._build_complete_prompt(
+                enhanced_research, platform, case_prompt, rag_chunks=rag_chunks
+            )
+
+            # Step 3: 结构化输出（带质量控制重试）
             article, quality_metrics = await self._generate_structured_article(
                 full_prompt, topic_str, platform
             )
@@ -445,7 +450,21 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
                 self.logger.error(f"❌ {platform.value}内容生成失败")
                 return None
 
-            # Step 3: 创建内容版本
+            # Step 4: RAG声明验证 - 统计文章中有来源支撑的数字声明比例
+            claim_report: Dict = {"total": 0, "verified": 0, "unverified": 0, "unverified_claims": []}
+            if self.rag_engine.available:
+                claim_report = self.rag_engine.verify_content_claims(article.content)
+                verified_ratio = (
+                    claim_report["verified"] / claim_report["total"]
+                    if claim_report["total"] > 0
+                    else 1.0
+                )
+                self.logger.info(
+                    f"✅ 声明验证: {claim_report['verified']}/{claim_report['total']} "
+                    f"有来源支撑 ({verified_ratio:.0%})"
+                )
+
+            # Step 5: 创建内容版本
             return ContentVersion(
                 version_id=str(uuid.uuid4()),
                 platform=platform,
@@ -463,6 +482,8 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
                     "quality_score": quality_metrics.get("total_density_score", 0),
                     "specific_data_count": quality_metrics.get("specific_data_count", 0),
                     "quality_grade": quality_metrics.get("grade", "C"),
+                    "rag_chunks_used": len(rag_chunks),
+                    "claim_verification": claim_report,
                 },
                 created_at=datetime.now(),
             )
@@ -471,8 +492,27 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             self.logger.error(f"❌ 生成{platform.value}内容版本失败: {e}")
             return None
     
-    def _build_complete_prompt(self, research: StructuredResearch, platform: Platform, case_prompt: str) -> str:
-        """构建完整提示词"""
+    def _build_complete_prompt(
+        self,
+        research: StructuredResearch,
+        platform: Platform,
+        case_prompt: str,
+        rag_chunks: Optional[List[Dict]] = None,
+    ) -> str:
+        """构建完整提示词，可选注入 RAG 检索到的原始来源段落"""
+        rag_section = ""
+        if rag_chunks:
+            lines = ["## 已验证来源原文（优先引用这些段落中的数据与细节）\n"]
+            for i, chunk in enumerate(rag_chunks[:5], 1):
+                title = chunk.get("title", "")
+                content = chunk.get("content", "")
+                url = chunk.get("url", "")
+                sim = chunk.get("similarity", 0)
+                lines.append(
+                    f"[来源{i}] {title}（相关度 {sim:.0%}）\n{content}\n来源: {url}\n"
+                )
+            rag_section = "\n".join(lines)
+
         return f"""
 # 内容生成任务
 
@@ -486,6 +526,7 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
 - 平台: {platform.value}
 - 要求: 符合平台用户心理和内容调性
 
+{rag_section}
 {case_prompt}
 
 ## 质量要求确认
@@ -551,72 +592,37 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
             except Exception as e:
                 self.logger.error(f"❌ 第{attempt + 1}次生成失败: {e}")
                 if attempt == max_retries - 1:
-                    return None, {}
+                    raise RuntimeError(
+                        f"{platform.value} 内容生成失败，已重试 {max_retries} 次。最后错误: {e}"
+                    ) from e
 
-        return None, {}
-    
-    def _create_error_version(self, research_data: ResearchData, platform: Platform, error_msg: str) -> ContentVersion:
-        """创建错误版本"""
-        return ContentVersion(
-            version_id=str(uuid.uuid4()),
-            platform=platform,
-            content_type=ContentType.ARTICLE,
-            title=f"【系统提示】{research_data.topic}",
-            content=f"抱歉，由于技术原因暂时无法生成高质量内容。错误: {error_msg[:100]}",
-            metadata={
-                "error": True,
-                "error_message": error_msg,
-                "generated_at": datetime.now().isoformat(),
-                "quality_score": 0.0
-            },
-            created_at=datetime.now()
-        )
+        raise RuntimeError(f"{platform.value} 内容生成失败，{max_retries} 次重试均未通过质量检验")
     
     # 实现FactCheckingMixin接口
     async def _generate_initial_content(self, prompt: str, platform: str, research_data: Dict) -> str:
         """生成初始内容 - 集成反审查机制"""
-        try:
-            platform_enum = Platform(platform.lower()) if isinstance(platform, str) else Platform.WECHAT
-            # 兼容 dict → Pydantic 模型
-            research_obj = research_data
-            if isinstance(research_data, dict):
-                try:
-                    research_obj = ResearchData(**research_data)
-                except Exception:
-                    try:
-                        research_obj = ResearchData.parse_obj(research_data)  # pydantic v1 兼容
-                    except Exception:
-                        research_obj = ResearchData(**{})
-            
-            enhanced_research = await self._conduct_deep_research(research_obj)
-            case_prompt = get_enhanced_content_generation_prompt(platform_enum, enhanced_research)
-            
-            # 构建完整提示词
-            full_prompt = f"{prompt}\n\n{case_prompt}"
-            
-            # 使用反审查系统生成内容
-            result = self.anti_censorship_generator.generate_content(
-                prompt=full_prompt,
-                topic=research_obj.topic,
-                expected_length=self._get_expected_length(platform_enum),
-                preferred_model="qwen3"
-            )
-            
-            # 记录反审查结果
-            if result["switches_made"]:
-                self.logger.warning(f"🔄 模型切换: {result['switches_made']}")
-            
-            if not result["success"]:
-                self.logger.error(f"❌ 反审查生成失败，使用降级策略")
-                # 降级到原有方法
-                return await self._fallback_generate_content(full_prompt)
-            
-            self.logger.info(f"✅ 内容生成成功，使用模型: {result['model_used']}")
-            return result["final_content"]
-            
-        except Exception as e:
-            self.logger.error(f"❌ 生成初始内容失败: {e}")
-            return f"内容生成失败: {str(e)}"
+        platform_enum = Platform(platform.lower()) if isinstance(platform, str) else Platform.WECHAT
+        research_obj = research_data
+        if isinstance(research_data, dict):
+            research_obj = ResearchData(**research_data)
+
+        enhanced_research = await self._conduct_deep_research(research_obj)
+        case_prompt = get_enhanced_content_generation_prompt(platform_enum, enhanced_research)
+        full_prompt = f"{prompt}\n\n{case_prompt}"
+
+        # generate_content 内部失败会 raise RuntimeError
+        result = self.anti_censorship_generator.generate_content(
+            prompt=full_prompt,
+            topic=research_obj.topic,
+            expected_length=self._get_expected_length(platform_enum),
+            preferred_model="qwen3"
+        )
+
+        if result["switches_made"]:
+            self.logger.warning(f"🔄 模型切换: {result['switches_made']}")
+
+        self.logger.info(f"✅ 内容生成成功，使用模型: {result['model_used']}")
+        return result["final_content"]
     
     def _get_expected_length(self, platform: Platform) -> int:
         """获取平台期望的内容长度"""
@@ -630,20 +636,15 @@ class WriterAgent(FactCheckingMixin, BaseAgent):
     
     async def _fallback_generate_content(self, prompt: str) -> str:
         """降级内容生成方法（当反审查系统失败时使用）"""
-        try:
-            model_name = os.getenv("WRITER_MODEL", get_default_model())
-            response = self.openai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "专业内容创作专家"},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=2000,
-                temperature=0.3
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            self.logger.error(f"❌ 降级生成也失败: {e}")
-            return "内容生成完全失败，请检查系统配置"
+        model_name = os.getenv("WRITER_MODEL", get_default_model())
+        client = self._get_async_client()
+        response = await client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "专业内容创作专家"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2000,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content.strip()

@@ -15,6 +15,7 @@ from .base import BaseAgent
 from ..models import ResearchData
 from ..utils.anti_hallucination import FactCheckingMixin
 from ..core.openai_client import get_async_client, get_default_model, structured_completion
+from ..engines.rag_engine import RAGEngine
 
 
 # ── 结构化输出模型 ──────────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
         self._search_api_key = search_api_key or os.getenv("TAVILY_API_KEY")
         self._tavily: Optional[Any] = None  # 延迟初始化
         self._async_client: Optional[AsyncOpenAI] = None
+        self.rag_engine = RAGEngine()  # 向量知识库，供 WriterAgent 共享
 
     # ── 初始化辅助 ──────────────────────────────────────────────────────────────
 
@@ -103,6 +105,11 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
 
         # 1. 通过 LLM Tool Use 编排多轮搜索
         sources, raw_search_data = await self._tool_use_research(topic, depth)
+
+        # 1b. 将搜索结果分块存入向量知识库（供 WriterAgent 检索验证）
+        if self.rag_engine.available:
+            stored = self.rag_engine.store_sources(topic, sources)
+            self.logger.info(f"📚 RAG存储 {stored} 个文本块")
 
         # 2. 并行提取趋势、竞品、关键点（基于搜索结果）
         trends, competitors, key_points = await asyncio.gather(
@@ -219,7 +226,9 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
         """异步执行 Tavily 搜索"""
         tavily = self._get_tavily()
         if tavily is None:
-            return self._fallback_search(query)
+            raise RuntimeError(
+                "Tavily 客户端未初始化，请检查 TAVILY_API_KEY 环境变量"
+            )
 
         try:
             loop = asyncio.get_event_loop()
@@ -258,19 +267,7 @@ class ResearchAgent(FactCheckingMixin, BaseAgent):
             return results
         except Exception as e:
             self.logger.error(f"Tavily 搜索失败 ({query}): {e}")
-            return self._fallback_search(query)
-
-    def _fallback_search(self, query: str) -> List[Dict]:
-        """Tavily 不可用时的占位结果"""
-        return [
-            {
-                "title": f"关于「{query}」的分析",
-                "url": "",
-                "snippet": f"「{query}」相关信息待补充（搜索服务暂不可用）",
-                "source": "fallback",
-                "relevance_score": 0.3,
-            }
-        ]
+            raise RuntimeError(f"Tavily 搜索失败 (query='{query}'): {e}") from e
 
     def _format_search_results(self, results: List[Dict], query: str) -> str:
         lines = [f"搜索查询：{query}\n结果："]
