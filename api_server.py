@@ -13,10 +13,10 @@ try:
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
 except ImportError:
-    print("请安装FastAPI相关依赖: pip install fastapi uvicorn")
+    print("请先安装依赖: uv sync")
     exit(1)
 
-from content_factory import MasterController, Platform, TaskStatus
+from src.content_factory import MasterController, Platform, TaskStatus
 
 # 初始化FastAPI应用
 app = FastAPI(

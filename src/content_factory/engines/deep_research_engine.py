@@ -135,7 +135,8 @@ class CRAGEvaluator:
 class DeepResearchEngine:
     """深度研究引擎 - 核心组件"""
     
-    def __init__(self, openai_client, search_client=None):
+    def __init__(self, openai_client=None, search_client=None):
+        # openai_client 可选：为空时降级为规则/模拟路径
         self.openai_client = openai_client
         self.search_client = search_client
         self.crag_evaluator = CRAGEvaluator(openai_client)

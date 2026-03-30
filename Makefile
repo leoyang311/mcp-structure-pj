@@ -1,75 +1,57 @@
-.PHONY: install dev-install test clean lint format run-cli run-api demo check-env docker-up docker-down
+.PHONY: install dev-install test clean lint format run-cli run-api check-env docker-up docker-down setup
 
-# Installation
+# ── 安装 ────────────────────────────────────────────────────────────────────────
 install:
 	uv sync
 
 dev-install:
 	uv sync --all-extras
 
-# Testing
+# ── 测试 ────────────────────────────────────────────────────────────────────────
 test:
-	uv run pytest tests/ -v
+	uv run pytest test_enhanced_anti_censorship.py test_qwen3_three_topics.py -v
 
-# Code quality
+# ── 代码质量 ─────────────────────────────────────────────────────────────────────
 lint:
 	uv run ruff check .
 
 format:
 	uv run ruff format .
 
-# Clean up
+typecheck:
+	uv run mypy src/content_factory/
+
+# ── 清理 ────────────────────────────────────────────────────────────────────────
 clean:
 	find . -name "*.pyc" -delete
 	find . -name "__pycache__" -type d -exec rm -rf {} +
-	rm -rf .pytest_cache/
-	rm -rf dist/
-	rm -rf *.egg-info/
+	rm -rf .pytest_cache/ dist/ *.egg-info/
 
-# Environment check
+# ── 环境检查 ─────────────────────────────────────────────────────────────────────
 check-env:
-	@echo "Checking environment variables..."
-	@test -f .env || (echo "Error: .env file not found" && exit 1)
-	@grep -q "OPENAI_API_KEY" .env || (echo "Error: OPENAI_API_KEY not found in .env" && exit 1)
-	@grep -q "TAVILY_API_KEY" .env || (echo "Error: TAVILY_API_KEY not found in .env" && exit 1)
-	@echo "Environment check passed ✓"
+	@echo "Checking environment..."
+	@test -f .env || (echo "❌ .env not found — run: cp .env.example .env" && exit 1)
+	@grep -q "OPENAI_API_KEY" .env || (echo "❌ OPENAI_API_KEY missing in .env" && exit 1)
+	@grep -q "TAVILY_API_KEY" .env || (echo "❌ TAVILY_API_KEY missing in .env" && exit 1)
+	@echo "✅ Environment check passed"
 
-# Docker services
+# ── Docker ───────────────────────────────────────────────────────────────────────
 docker-up:
 	docker-compose up -d
 
 docker-down:
 	docker-compose down
 
-# Run applications
+# ── 启动服务 ─────────────────────────────────────────────────────────────────────
 run-cli:
-	uv run python start.py cli
+	uv run python cli.py --help
 
 run-api:
-	uv run python start.py api
+	uv run python api_server.py
 
-demo:
-	uv run python demo_optimized.py
+run-gui:
+	uv run python start_gui_smart.py
 
-# Development setup
-setup: check-env docker-up dev-install
-	@echo "Development environment setup complete ✓"
-
-# Full demo
-full-demo: setup demo
-	@echo "Demo complete ✓"
-
-# Anti-hallucination demo
-anti-hallucination-demo: setup
-	uv run python demo_anti_hallucination.py
-
-# Show anti-hallucination features
-show-features:
-	@echo "🛡️ FastMCP Anti-Hallucination Features:"
-	@echo "✅ Iterative fact verification through multiple searches"
-	@echo "✅ Mandatory source citation with specific URLs and dates"
-	@echo "✅ Cross-referencing claims across multiple sources"
-	@echo "✅ Confidence level indicators for all statements"
-	@echo "✅ Transparent reasoning and uncertainty acknowledgment"
-	@echo "✅ Entity precision with exact data and measurements"
-	@echo "✅ Verification protocols based on Deep Research methodology"
+# ── 完整开发环境 ──────────────────────────────────────────────────────────────────
+setup: check-env dev-install
+	@echo "✅ Development environment ready"

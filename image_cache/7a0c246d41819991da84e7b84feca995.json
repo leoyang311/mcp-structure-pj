@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "platform": "xiaohongshu",
+  "platform_description": "小红书种草图",
+  "prompt": "content, information, illustration, modern, clean, aesthetic, lifestyle photography, soft lighting, instagram worthy, pastel colors, highly detailed, professional photography, 4k resolution, award winning composition, perfect lighting, Chinese aesthetic preferences",
+  "images": [
+    {
+      "url": null,
+      "index": 1,
+      "prompt": "content, information, illustration, modern, clean, aesthetic, lifestyle photography, soft lighting, instagram worthy, pastel colors, highly detailed, professional photography, 4k resolution, award winning composition, perfect lighting, Chinese aesthetic preferences",
+      "size": "1024x1024",
+      "platform": "xiaohongshu"
+    }
+  ],
+  "num_generated": 1,
+  "model": "gpt-image-1",
+  "provider": "yunwu",
+  "generation_time": 1755651265.705235
+}

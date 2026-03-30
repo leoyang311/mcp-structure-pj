@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "platform": "xiaohongshu",
+  "platform_description": "小红书种草图",
+  "prompt": "番茄钟计时器, 时间块规划日历, 电脑屏幕显示任务清单, 简约办公桌面 in 办公室, 轻松高效 atmosphere, 简约, 商务, 现代, aesthetic, lifestyle photography, soft lighting, instagram worthy, pastel colors, 清新明亮, 浅蓝+淡绿配色 color palette, highly detailed, professional photography, 4k resolution, award winning composition, perfect lighting, Chinese aesthetic preferences",
+  "images": [
+    {
+      "index": 1,
+      "prompt": "番茄钟计时器, 时间块规划日历, 电脑屏幕显示任务清单, 简约办公桌面 in 办公室, 轻松高效 atmosphere, 简约, 商务, 现代, aesthetic, lifestyle photography, soft lighting, instagram worthy, pastel colors, 清新明亮, 浅蓝+淡绿配色 color palette, highly detailed, professional photography, 4k resolution, award winning composition, perfect lighting, Chinese aesthetic preferences",
+      "size": "1024x1024",
+      "platform": "xiaohongshu",
+      "image_path": "image_cache/4780741a61928c130789a4170b864135.png"
+    }
+  ],
+  "num_generated": 1,
+  "model": "gpt-image-1",
+  "provider": "yunwu",
+  "generation_time": 1755651871.8575208
+}

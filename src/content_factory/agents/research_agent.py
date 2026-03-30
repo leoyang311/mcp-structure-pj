@@ -1,291 +1,414 @@
 """
 Research Agent - 话题研究和信息收集
-集成反幻觉技术确保研究准确性
+使用 Tavily 真实搜索 + LLM Tool Use 编排研究流程 + 结构化输出
 """
 import json
 import os
 import asyncio
-import aiohttp
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from datetime import datetime
+
+from pydantic import BaseModel, Field
+from openai import AsyncOpenAI
 
 from .base import BaseAgent
 from ..models import ResearchData
-from ..utils.anti_hallucination import FactCheckingMixin, AntiHallucinationEngine
+from ..utils.anti_hallucination import FactCheckingMixin
+from ..core.openai_client import get_async_client, get_default_model, structured_completion
+
+
+# ── 结构化输出模型 ──────────────────────────────────────────────────────────────
+
+class ResearchSummary(BaseModel):
+    background: str = Field(description="话题背景与重要性（100-200字）")
+    key_findings: List[str] = Field(description="3-5条核心发现与洞察")
+    market_trends: List[str] = Field(description="2-4条市场趋势与机会")
+    challenges: List[str] = Field(description="1-3条潜在挑战与风险")
+    conclusion: str = Field(description="结论与行动建议（50-100字）")
+
+
+# ── Tavily 搜索工具定义（供 LLM Tool Use）────────────────────────────────────
+
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "tavily_search",
+        "description": "搜索互联网获取关于某话题的最新信息、新闻、数据与趋势",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索查询语句，建议使用中文或英文精确关键词",
+                },
+                "search_depth": {
+                    "type": "string",
+                    "enum": ["basic", "advanced"],
+                    "description": "搜索深度：basic 速度快，advanced 结果更丰富",
+                    "default": "basic",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大返回结果数，1-10",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
 
 
 class ResearchAgent(FactCheckingMixin, BaseAgent):
     """
-    研究Agent - 负责话题研究、信息收集和分析
-    集成反幻觉技术确保研究准确性
+    研究 Agent - 使用真实 Tavily 搜索 + LLM Tool Use 编排多轮检索
+    结构化输出保证摘要质量一致
     """
-    
+
     def __init__(self, openai_client=None, search_api_key: str = None, logger=None):
         super().__init__("research_agent", logger)
-        self.openai_client = openai_client
-        self.search_api_key = search_api_key
-        self.search_engines = ["duckduckgo", "tavily"] if search_api_key else ["duckduckgo"]
-    
+        self.sync_client = openai_client  # 兼容旧接口（sync）
+        self._search_api_key = search_api_key or os.getenv("TAVILY_API_KEY")
+        self._tavily: Optional[Any] = None  # 延迟初始化
+        self._async_client: Optional[AsyncOpenAI] = None
+
+    # ── 初始化辅助 ──────────────────────────────────────────────────────────────
+
+    def _get_tavily(self):
+        """延迟初始化 Tavily 客户端"""
+        if self._tavily is None:
+            try:
+                from tavily import TavilyClient
+                self._tavily = TavilyClient(api_key=self._search_api_key)
+            except Exception as e:
+                self.logger.warning(f"Tavily 初始化失败，将使用 LLM 内置知识: {e}")
+        return self._tavily
+
+    def _get_async_client(self) -> AsyncOpenAI:
+        if self._async_client is None:
+            self._async_client = get_async_client()
+        return self._async_client
+
+    # ── 主处理入口 ──────────────────────────────────────────────────────────────
+
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        处理研究任务
-        
-        Args:
-            input_data: {
-                "topic": str,
-                "depth": str,  # shallow, medium, deep
-                "platforms": List[str]
-            }
-            
-        Returns:
-            Dict[str, Any]: {
-                "research_data": ResearchData,
-                "status": "completed"
-            }
-        """
         topic = input_data.get("topic", "")
         depth = input_data.get("depth", "medium")
         platforms = input_data.get("platforms", [])
-        
+
         if not topic:
             raise ValueError("Topic is required for research")
-        
-        self.logger.info(f"Starting research on topic: {topic}")
-        
-        # 并行执行各种研究任务
-        tasks = [
-            self._web_search(topic, depth),
-            self._analyze_trends(topic),
-            self._competitor_analysis(topic, platforms),
-            self._extract_key_points(topic)
-        ]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理结果
-        web_sources = results[0] if not isinstance(results[0], Exception) else []
-        trends = results[1] if not isinstance(results[1], Exception) else []
-        competitors = results[2] if not isinstance(results[2], Exception) else []
-        key_points = results[3] if not isinstance(results[3], Exception) else []
-        
-        # 生成研究总结
-        summary = await self._generate_summary(topic, web_sources, key_points, trends)
-        
-        # 构建研究数据
+
+        self.logger.info(f"🔍 开始研究话题: {topic} (深度: {depth})")
+
+        # 1. 通过 LLM Tool Use 编排多轮搜索
+        sources, raw_search_data = await self._tool_use_research(topic, depth)
+
+        # 2. 并行提取趋势、竞品、关键点（基于搜索结果）
+        trends, competitors, key_points = await asyncio.gather(
+            self._extract_trends(topic, raw_search_data),
+            self._extract_competitors(topic, raw_search_data, platforms),
+            self._extract_key_points(topic, raw_search_data),
+        )
+
+        # 3. 结构化输出生成研究摘要
+        summary = await self._generate_structured_summary(
+            topic, sources, key_points, trends
+        )
+
         research_data = ResearchData(
             topic=topic,
-            sources=web_sources,
+            sources=sources,
             key_points=key_points,
             trends=trends,
             competitors=competitors,
             summary=summary,
-            created_at=datetime.now()
+            created_at=datetime.now(),
         )
-        
-        return {
-            "research_data": research_data,
-            "status": "completed"
-        }
-    
-    async def _web_search(self, topic: str, depth: str) -> List[Dict[str, Any]]:
+
+        self.logger.info(f"✅ 研究完成 - 收集 {len(sources)} 个来源")
+        return {"research_data": research_data, "status": "completed"}
+
+    # ── LLM Tool Use 研究编排 ────────────────────────────────────────────────────
+
+    async def _tool_use_research(
+        self, topic: str, depth: str
+    ) -> tuple[List[Dict], str]:
         """
-        网络搜索
+        让 LLM 自主决定搜索策略：通过 tool_use 循环，模型可多次调用 tavily_search
+        返回 (去重来源列表, 所有搜索结果合并文本)
         """
+        client = self._get_async_client()
+        model = os.getenv("RESEARCH_MODEL", get_default_model())
+
+        depth_instruction = {
+            "shallow": "执行 1 次搜索，获取基础信息",
+            "medium": "执行 2-3 次搜索，覆盖核心事实、趋势与案例",
+            "deep": "执行 3-5 次搜索，深入挖掘数据、竞品、用户需求与前景",
+        }.get(depth, "执行 2-3 次搜索")
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是专业研究分析师。请通过调用 tavily_search 工具收集关于指定话题的信息。"
+                    f"{depth_instruction}。每次搜索针对不同角度（核心概念/市场数据/最新动态/用户痛点等）。"
+                    "搜索结束后，输出：'RESEARCH_COMPLETE'。"
+                ),
+            },
+            {"role": "user", "content": f"请研究话题：{topic}"},
+        ]
+
+        all_sources: List[Dict] = []
+        all_text_parts: List[str] = []
+        seen_urls: set = set()
+        max_rounds = 6  # 防止无限循环
+
+        for _ in range(max_rounds):
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=[SEARCH_TOOL],
+                tool_choice="auto",
+                max_tokens=800,
+            )
+
+            msg = response.choices[0].message
+            messages.append(msg.model_dump(exclude_none=True))
+
+            # 没有工具调用 → 研究结束
+            if not msg.tool_calls:
+                break
+
+            # 执行所有工具调用
+            for tc in msg.tool_calls:
+                if tc.function.name != "tavily_search":
+                    continue
+                args = json.loads(tc.function.arguments)
+                results = await self._execute_tavily_search(
+                    query=args["query"],
+                    search_depth=args.get("search_depth", "basic"),
+                    max_results=args.get("max_results", 5),
+                )
+
+                # 去重并收集来源
+                for r in results:
+                    url = r.get("url", "")
+                    if url not in seen_urls:
+                        seen_urls.add(url)
+                        all_sources.append(r)
+
+                # 将结果文本送回 LLM
+                result_text = self._format_search_results(results, args["query"])
+                all_text_parts.append(result_text)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_text[:3000],  # 限制每次工具响应长度
+                    }
+                )
+
+        return all_sources[:10], "\n\n".join(all_text_parts)
+
+    # ── Tavily 搜索执行 ──────────────────────────────────────────────────────────
+
+    async def _execute_tavily_search(
+        self, query: str, search_depth: str = "basic", max_results: int = 5
+    ) -> List[Dict]:
+        """异步执行 Tavily 搜索"""
+        tavily = self._get_tavily()
+        if tavily is None:
+            return self._fallback_search(query)
+
         try:
-            # 模拟搜索结果 (实际应用中应该集成真实搜索API)
-            sources = []
-            
-            search_queries = self._generate_search_queries(topic, depth)
-            
-            for query in search_queries:
-                # 这里应该调用真实的搜索API
-                mock_results = await self._mock_search(query)
-                sources.extend(mock_results)
-            
-            return sources[:10]  # 限制返回数量
-            
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: tavily.search(
+                    query=query,
+                    search_depth=search_depth,
+                    max_results=max_results,
+                    include_answer=True,
+                ),
+            )
+            results = []
+            for item in response.get("results", []):
+                results.append(
+                    {
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "snippet": item.get("content", "")[:400],
+                        "source": item.get("url", "").split("/")[2] if item.get("url") else "未知",
+                        "relevance_score": item.get("score", 0.5),
+                    }
+                )
+            # 附加 Tavily 生成的答案摘要
+            if response.get("answer"):
+                results.insert(
+                    0,
+                    {
+                        "title": f"[Tavily摘要] {query}",
+                        "url": "",
+                        "snippet": response["answer"][:400],
+                        "source": "tavily_answer",
+                        "relevance_score": 0.95,
+                    },
+                )
+            return results
         except Exception as e:
-            self.logger.error(f"Web search failed: {str(e)}")
-            return []
-    
-    async def _mock_search(self, query: str) -> List[Dict[str, Any]]:
-        """
-        模拟搜索结果 (用于演示)
-        """
-        # 模拟异步搜索延迟
-        await asyncio.sleep(0.5)
-        
+            self.logger.error(f"Tavily 搜索失败 ({query}): {e}")
+            return self._fallback_search(query)
+
+    def _fallback_search(self, query: str) -> List[Dict]:
+        """Tavily 不可用时的占位结果"""
         return [
             {
-                "title": f"关于{query}的深度分析",
-                "url": f"https://example.com/{query.replace(' ', '-')}",
-                "snippet": f"这是关于{query}的详细分析文章，包含了最新的研究和数据...",
-                "source": "权威媒体",
-                "relevance_score": 0.85,
-            },
-            {
-                "title": f"{query}最新趋势报告",
-                "url": f"https://research.com/{query}-trends",
-                "snippet": f"最新的{query}趋势数据显示，该领域正在快速发展...",
-                "source": "研究机构",
-                "relevance_score": 0.78,
+                "title": f"关于「{query}」的分析",
+                "url": "",
+                "snippet": f"「{query}」相关信息待补充（搜索服务暂不可用）",
+                "source": "fallback",
+                "relevance_score": 0.3,
             }
         ]
-    
-    def _generate_search_queries(self, topic: str, depth: str) -> List[str]:
-        """
-        生成搜索查询
-        """
-        base_queries = [topic]
-        
-        if depth == "deep":
-            base_queries.extend([
-                f"{topic} 最新趋势",
-                f"{topic} 市场分析", 
-                f"{topic} 用户需求",
-                f"{topic} 竞品分析",
-                f"{topic} 发展前景"
-            ])
-        elif depth == "medium":
-            base_queries.extend([
-                f"{topic} 趋势",
-                f"{topic} 分析",
-                f"{topic} 市场"
-            ])
-        
-        return base_queries
-    
-    async def _analyze_trends(self, topic: str) -> List[str]:
-        """
-        趋势分析
-        """
-        try:
-            # 模拟趋势分析
-            await asyncio.sleep(0.3)
-            
-            trends = [
-                f"{topic}正在成为热门话题",
-                f"用户对{topic}的关注度持续上升",
-                f"{topic}相关技术快速发展",
-                f"市场对{topic}解决方案需求增长",
-            ]
-            
-            return trends
-            
-        except Exception as e:
-            self.logger.error(f"Trend analysis failed: {str(e)}")
-            return []
-    
-    async def _competitor_analysis(self, topic: str, platforms: List[str]) -> List[str]:
-        """
-        竞品分析
-        """
-        try:
-            # 模拟竞品分析
-            await asyncio.sleep(0.4)
-            
-            competitors = [
-                f"平台A在{topic}内容上表现优秀",
-                f"平台B的{topic}相关内容获得高互动",
-                f"头部创作者在{topic}领域影响力强",
-            ]
-            
-            return competitors
-            
-        except Exception as e:
-            self.logger.error(f"Competitor analysis failed: {str(e)}")
-            return []
-    
-    async def _extract_key_points(self, topic: str) -> List[str]:
-        """
-        提取关键要点
-        """
-        try:
-            # 模拟关键要点提取
-            await asyncio.sleep(0.2)
-            
-            key_points = [
-                f"{topic}的核心概念和定义",
+
+    def _format_search_results(self, results: List[Dict], query: str) -> str:
+        lines = [f"搜索查询：{query}\n结果："]
+        for i, r in enumerate(results, 1):
+            lines.append(f"{i}. [{r['title']}]({r['url']})\n   {r['snippet']}")
+        return "\n".join(lines)
+
+    # ── 信息提取（基于搜索结果的 LLM 分析）────────────────────────────────────
+
+    async def _extract_trends(self, topic: str, search_text: str) -> List[str]:
+        if not search_text:
+            return [f"{topic}正处于快速发展阶段"]
+        return await self._llm_extract_list(
+            topic=topic,
+            search_text=search_text,
+            task="从以上搜索结果中提取3-5条关于该话题的市场趋势或发展动向",
+            fallback=[f"{topic}用户关注度持续上升"],
+        )
+
+    async def _extract_competitors(
+        self, topic: str, search_text: str, platforms: List[str]
+    ) -> List[str]:
+        platform_hint = f"（目标平台：{', '.join(platforms)}）" if platforms else ""
+        return await self._llm_extract_list(
+            topic=topic,
+            search_text=search_text,
+            task=f"提取2-4条关于该话题的竞品分析或市场格局信息{platform_hint}",
+            fallback=[f"{topic}领域头部玩家竞争激烈"],
+        )
+
+    async def _extract_key_points(self, topic: str, search_text: str) -> List[str]:
+        return await self._llm_extract_list(
+            topic=topic,
+            search_text=search_text,
+            task="提取5条最重要的核心要点（优先包含具体数字/日期/人名等可验证信息）",
+            fallback=[
+                f"{topic}的核心概念与定义",
                 f"{topic}的主要应用场景",
-                f"{topic}的技术优势和特点",
-                f"{topic}面临的挑战和问题",
-                f"{topic}的未来发展方向",
-            ]
-            
-            return key_points
-            
-        except Exception as e:
-            self.logger.error(f"Key points extraction failed: {str(e)}")
-            return []
-    
-    async def _generate_summary(
-        self, 
-        topic: str, 
-        sources: List[Dict[str, Any]], 
-        key_points: List[str],
-        trends: List[str]
-    ) -> str:
-        """
-        生成研究总结
-        """
+                f"{topic}的技术优势",
+                f"{topic}面临的挑战",
+                f"{topic}的未来方向",
+            ],
+        )
+
+    async def _llm_extract_list(
+        self,
+        topic: str,
+        search_text: str,
+        task: str,
+        fallback: List[str],
+        max_items: int = 5,
+    ) -> List[str]:
+        """通用 LLM 列表提取，失败时返回 fallback"""
+        client = self._get_async_client()
+        model = os.getenv("RESEARCH_MODEL", get_default_model())
         try:
-            if self.openai_client:
-                # 使用OpenAI API生成更智能的总结
-                prompt = f"""
-基于以下研究数据，为话题"{topic}"生成一个深入、客观的研究总结：
 
-关键要点：
-{chr(10).join(f"• {point}" for point in key_points)}
+            class _ListOutput(BaseModel):
+                items: List[str] = Field(description=f"提取的条目列表，最多{max_items}条")
 
-市场趋势：
-{chr(10).join(f"• {trend}" for trend in trends)}
-
-信息来源数量：{len(sources)}
-
-请生成一个专业、有深度的研究总结，包含：
-1. 话题背景和重要性
-2. 关键发现和洞察
-3. 市场趋势和机会
-4. 潜在挑战和风险
-5. 结论和建议
-
-要求：客观分析，内容准确，语言专业，字数800-1200字。
-"""
-                model_name = os.getenv("RESEARCH_MODEL", "gpt-3.5-turbo")
-                response = self.openai_client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": "你是一个专业的研究分析师，擅长基于数据生成深入、客观的研究总结。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1500,
-                    temperature=0.3
-                )
-                
-                generated_summary = response.choices[0].message.content.strip()
-                self.logger.info(f"Generated research summary via OpenAI API (length: {len(generated_summary)})")
-                return generated_summary
-            
-            # 回退到基础模板生成
-            summary = f"""
-基于对"{topic}"的深度研究，发现以下关键信息：
-
-## 核心要点
-{chr(10).join(f"• {point}" for point in key_points[:3])}
-
-## 市场趋势  
-{chr(10).join(f"• {trend}" for trend in trends[:2])}
-
-## 信息来源
-共收集{len(sources)}个相关信息源，包括权威媒体、研究机构等可靠来源。
-
-## 研究结论
-{topic}正处于快速发展期，具有很高的内容创作价值和用户关注度。
-建议从多角度进行内容创作，重点关注用户实际需求和应用场景。
-            """.strip()
-            
-            return summary
-            
+            result = await structured_completion(
+                client=client,
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"话题：{topic}\n\n搜索结果摘要：\n{search_text[:2000]}\n\n"
+                            f"任务：{task}。每条不超过50字，优先引用具体数据。"
+                        ),
+                    }
+                ],
+                response_model=_ListOutput,
+                temperature=0.2,
+                max_tokens=600,
+            )
+            return result.items[:max_items] if result.items else fallback
         except Exception as e:
-            self.logger.error(f"Summary generation failed: {str(e)}")
-            return f"关于{topic}的研究已完成，详细信息请参考具体数据。"
+            self.logger.warning(f"列表提取失败: {e}")
+            return fallback
+
+    # ── 结构化摘要生成 ──────────────────────────────────────────────────────────
+
+    async def _generate_structured_summary(
+        self,
+        topic: str,
+        sources: List[Dict],
+        key_points: List[str],
+        trends: List[str],
+    ) -> str:
+        """使用结构化输出生成高质量研究摘要"""
+        client = self._get_async_client()
+        model = os.getenv("RESEARCH_MODEL", get_default_model())
+
+        source_snippets = "\n".join(
+            f"- {s['title']}: {s['snippet']}" for s in sources[:6]
+        )
+        points_text = "\n".join(f"• {p}" for p in key_points)
+        trends_text = "\n".join(f"• {t}" for t in trends)
+
+        try:
+            result = await structured_completion(
+                client=client,
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是专业研究分析师，基于真实数据生成深入客观的研究摘要。",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"话题：{topic}\n\n"
+                            f"核心要点：\n{points_text}\n\n"
+                            f"市场趋势：\n{trends_text}\n\n"
+                            f"信息来源摘录（{len(sources)}条）：\n{source_snippets}\n\n"
+                            "请生成专业的研究摘要，每个字段必须包含具体数据或可验证信息，禁止模糊表述。"
+                        ),
+                    },
+                ],
+                response_model=ResearchSummary,
+                temperature=0.3,
+                max_tokens=1500,
+            )
+
+            # 将结构化摘要拼接为 Markdown 格式
+            sections = [
+                f"## 话题背景\n{result.background}",
+                "## 核心发现\n" + "\n".join(f"• {f}" for f in result.key_findings),
+                "## 市场趋势\n" + "\n".join(f"• {t}" for t in result.market_trends),
+                "## 挑战与风险\n" + "\n".join(f"• {c}" for c in result.challenges),
+                f"## 结论\n{result.conclusion}",
+            ]
+            return "\n\n".join(sections)
+
+        except Exception as e:
+            self.logger.error(f"结构化摘要生成失败: {e}")
+            return (
+                f"关于「{topic}」的研究摘要（{len(sources)} 个来源）：\n"
+                + "\n".join(f"• {p}" for p in key_points[:5])
+            )

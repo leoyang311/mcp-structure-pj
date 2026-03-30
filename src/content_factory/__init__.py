@@ -4,72 +4,53 @@ FastMCP Multi-Agent Content Production System
 import os
 from dotenv import load_dotenv
 
-# 加载环境变量
 load_dotenv()
 
-# 版本信息
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "Content Factory Team"
-
-# 导入主要组件
-from .models import *
-from .agents import *
-from .core import *
-from .utils import *
-
-# 配置OpenAI
-from openai import OpenAI
-
-# 创建OpenAI客户端实例
-openai_client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-)
-
-# 系统配置
-MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "3"))
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./content_factory.db")
-
-# Agent配置 (统一使用OpenAI)
-AGENT_CONFIGS = {
-    "research": {
-        "model": os.getenv("RESEARCH_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
-        "temperature": float(os.getenv("RESEARCH_TEMPERATURE", "0.1")),
-        "max_tokens": int(os.getenv("RESEARCH_MAX_TOKENS", "2000"))
-    },
-    "writer": {
-        "model": os.getenv("WRITER_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
-        "temperature": float(os.getenv("WRITER_TEMPERATURE", "0.7")),
-        "max_tokens": int(os.getenv("WRITER_MAX_TOKENS", "4000"))
-    },
-    "video": {
-        "model": os.getenv("VIDEO_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
-        "temperature": float(os.getenv("VIDEO_TEMPERATURE", "0.6")),
-        "max_tokens": int(os.getenv("VIDEO_MAX_TOKENS", "3000"))
-    },
-    "scorer": {
-        "model": os.getenv("SCORER_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
-        "temperature": float(os.getenv("SCORER_TEMPERATURE", "0.2")),
-        "max_tokens": int(os.getenv("SCORER_MAX_TOKENS", "1500"))
-    }
-}
 __email__ = "team@contentfactory.ai"
 
+# 显式导入，避免通配符污染命名空间
 from .core import MasterController, TaskManager, ContentPipeline
 from .agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
 from .models import ContentTask, Platform, TaskStatus, ContentType
 from .utils import get_platform_config, evaluate_content_quality
 
+# 懒加载 OpenAI 客户端（避免导入时因缺少 API key 报错）
+def _get_client():
+    from .core.openai_client import get_global_client
+    return get_global_client()
+
+# 系统配置（从环境变量读取）
+MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "3"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./content_factory.db")
+
+# Agent 模型配置（模型名通过 get_default_model() 动态获取，避免硬编码）
+def _make_agent_config(env_model_key: str, temperature: float, max_tokens: int) -> dict:
+    from .core.openai_client import get_default_model
+    return {
+        "model": os.getenv(env_model_key, get_default_model()),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+AGENT_CONFIGS = {
+    "research": _make_agent_config("RESEARCH_MODEL", 0.1, 2000),
+    "writer":   _make_agent_config("WRITER_MODEL",   0.2, 4000),
+    "video":    _make_agent_config("VIDEO_MODEL",    0.6, 3000),
+    "scorer":   _make_agent_config("SCORER_MODEL",   0.2, 1500),
+}
+
 __all__ = [
-    # Core components
+    # Core
     "MasterController",
-    "TaskManager", 
+    "TaskManager",
     "ContentPipeline",
     # Agents
     "ResearchAgent",
     "WriterAgent",
-    "VideoAgent", 
+    "VideoAgent",
     "ScorerAgent",
     # Models
     "ContentTask",
@@ -79,8 +60,7 @@ __all__ = [
     # Utils
     "get_platform_config",
     "evaluate_content_quality",
-    # Client
-    "openai_client",
+    # Config
     "AGENT_CONFIGS",
     # Meta
     "__version__",
