@@ -28,6 +28,7 @@ dependencies = [
     "chromadb>=0.5.3,<0.6.0",
     "sentence-transformers>=2.2.0",
     "onnxruntime>=1.20.0,<1.24.0",
+    "fal-client>=0.5.0",
 ]
 
 [build-system]

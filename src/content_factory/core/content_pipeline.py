@@ -8,6 +8,8 @@ import time
 
 if TYPE_CHECKING:
     from ..agents import ResearchAgent, WriterAgent, VideoAgent, ScorerAgent
+    from ..agents.image_agent import ImageGenerationAgent
+    from ..agents.seedance_agent import SeedanceVideoAgent
 from ..models import ContentTask, TaskResult, TaskStatus
 
 
@@ -23,34 +25,48 @@ class ContentPipeline:
         writer_agent: Optional["WriterAgent"] = None,
         video_agent: Optional["VideoAgent"] = None,
         scorer_agent: Optional["ScorerAgent"] = None,
+        image_agent: Optional["ImageGenerationAgent"] = None,
+        seedance_agent: Optional["SeedanceVideoAgent"] = None,
         logger: Optional[logging.Logger] = None
     ):
         self.logger = logger or logging.getLogger("content_pipeline")
-        
+
         # 初始化各个Agent (延迟导入以避免循环依赖)
         if research_agent is None:
             from ..agents.research_agent import ResearchAgent
             self.research_agent = ResearchAgent(logger=self.logger)
         else:
             self.research_agent = research_agent
-            
+
         if writer_agent is None:
             from ..agents.writer_agent import WriterAgent
             self.writer_agent = WriterAgent(logger=self.logger)
         else:
             self.writer_agent = writer_agent
-            
+
         if video_agent is None:
             from ..agents.video_agent import VideoAgent
             self.video_agent = VideoAgent(logger=self.logger)
         else:
             self.video_agent = video_agent
-            
+
         if scorer_agent is None:
             from ..agents.scorer_agent import ScorerAgent
             self.scorer_agent = ScorerAgent(logger=self.logger)
         else:
             self.scorer_agent = scorer_agent
+
+        if image_agent is None:
+            from ..agents.flux_image_agent import FluxImageAgent
+            self.image_agent = FluxImageAgent()
+        else:
+            self.image_agent = image_agent
+
+        if seedance_agent is None:
+            from ..agents.seedance_agent import SeedanceVideoAgent
+            self.seedance_agent = SeedanceVideoAgent()
+        else:
+            self.seedance_agent = seedance_agent
     
     async def execute(
         self, 
@@ -87,7 +103,30 @@ class ContentPipeline:
             result.content_versions = writing_result["content_versions"]
             await self._notify_progress(progress_callback, "writing", "completed", result.content_versions)
             
-            # Stage 3: 视频制作阶段 (如果需要)
+            # Stage 3: 图片生成阶段 (如果需要)
+            if task.include_image:
+                await self._notify_progress(progress_callback, "image", "processing", None)
+                image_result = await self._execute_image_generation(task, result.content_versions)
+                result.image_results = image_result
+                await self._notify_progress(progress_callback, "image", "completed", image_result)
+            else:
+                await self._notify_progress(progress_callback, "image", "skipped", None)
+
+            # Stage 4: Seedance 真实视频生成 (如果需要)
+            if task.include_seedance_video:
+                await self._notify_progress(progress_callback, "seedance_video", "processing", None)
+                seedance_result = await self._execute_seedance_video(
+                    task,
+                    result.research_data,
+                    result.content_versions,
+                    flux_image_results=result.image_results,  # FLUX 图片作 I2V 首帧
+                )
+                result.seedance_results = seedance_result
+                await self._notify_progress(progress_callback, "seedance_video", "completed", seedance_result)
+            else:
+                await self._notify_progress(progress_callback, "seedance_video", "skipped", None)
+
+            # Stage 5: 脚本视频制作阶段 (如果需要)
             video_versions = []
             if task.include_video:
                 await self._notify_progress(progress_callback, "video", "processing", None)
@@ -97,7 +136,7 @@ class ContentPipeline:
             else:
                 await self._notify_progress(progress_callback, "video", "skipped", None)
             
-            # Stage 4: 评分阶段
+            # Stage 6: 评分阶段
             await self._notify_progress(progress_callback, "scoring", "processing", None)
             scoring_result = await self._execute_scoring(
                 task, 
@@ -201,6 +240,75 @@ class ContentPipeline:
             self.logger.error(f"Video production phase failed for task {task.task_id}: {str(e)}")
             raise
     
+    async def _execute_seedance_video(
+        self,
+        task: ContentTask,
+        research_data,
+        content_versions,
+        flux_image_results: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """
+        执行 Seedance 真实视频生成阶段。
+        若 flux_image_results 存在，自动切换为 I2V 模式（首帧控制）。
+        """
+        self.logger.info(f"Starting Seedance video generation for task {task.task_id}")
+
+        seedance_input = {
+            "content_versions": content_versions,
+            "research_data": research_data,
+            "platforms": task.platforms,
+            "flux_image_results": flux_image_results or {},
+        }
+        result = await self.seedance_agent.execute(seedance_input)
+
+        successful = sum(1 for v in result.get("video_results", {}).values() if v.get("video_url"))
+        total = len(task.platforms)
+        self.logger.info(
+            f"Seedance video generation completed for task {task.task_id}: "
+            f"{successful}/{total} platforms succeeded"
+        )
+        return result
+
+    async def _execute_image_generation(
+        self,
+        task: ContentTask,
+        content_versions,
+    ) -> Dict[str, Any]:
+        """
+        执行图片生成阶段 —— 为每个平台的最佳文章版本生成配图。
+        图片生成是补充功能，单个平台失败不中断整体流程。
+        """
+        self.logger.info(f"Starting image generation phase for task {task.task_id}")
+
+        # 按平台收集最长文章文本作为图片生成的素材
+        platform_texts: Dict[str, str] = {}
+        for version in content_versions:
+            pname = version.platform.value
+            if pname not in platform_texts or len(version.content) > len(platform_texts[pname]):
+                platform_texts[pname] = version.content
+
+        if not platform_texts:
+            self.logger.warning("No content versions found for image generation")
+            return {}
+
+        image_input = {
+            "platforms": list(platform_texts.keys()),
+            # 传第一个平台的文案；ImageGenerationAgent 内部会按平台风格生成
+            "text": next(iter(platform_texts.values())),
+            "num_images": 1,
+            "use_cache": True,
+        }
+
+        result = await self.image_agent.execute(image_input)
+
+        successful = result.get("summary", {}).get("successful_platforms", 0)
+        total = result.get("summary", {}).get("total_platforms", 0)
+        self.logger.info(
+            f"Image generation phase completed for task {task.task_id}: "
+            f"{successful}/{total} platforms succeeded"
+        )
+        return result
+
     async def _execute_scoring(
         self, 
         task: ContentTask, 
@@ -278,6 +386,8 @@ class ContentPipeline:
             "writer_agent_busy": self.writer_agent.is_busy,
             "video_agent_busy": self.video_agent.is_busy,
             "scorer_agent_busy": self.scorer_agent.is_busy,
+            "image_agent_busy": self.image_agent.is_busy,
+            "seedance_agent_busy": self.seedance_agent.is_busy,
         }
     
     async def health_check(self) -> Dict[str, bool]:
@@ -288,9 +398,11 @@ class ContentPipeline:
             # 简单的健康检查 - 确保所有Agent都可用
             health = {
                 "research_agent": True,
-                "writer_agent": True, 
+                "writer_agent": True,
                 "video_agent": True,
                 "scorer_agent": True,
+                "image_agent": True,
+                "seedance_agent": True,
                 "overall": True
             }
             
@@ -301,7 +413,9 @@ class ContentPipeline:
             return {
                 "research_agent": False,
                 "writer_agent": False,
-                "video_agent": False, 
+                "video_agent": False,
                 "scorer_agent": False,
+                "image_agent": False,
+                "seedance_agent": False,
                 "overall": False
             }

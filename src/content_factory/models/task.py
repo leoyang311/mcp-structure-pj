@@ -89,6 +89,8 @@ class TaskResult(BaseModel):
     content_versions: List[ContentVersion] = Field(default_factory=list)
     quality_scores: Dict[str, QualityScore] = Field(default_factory=dict)
     best_version: Optional[ContentVersion] = None
+    image_results: Dict[str, Any] = Field(default_factory=dict)    # platform -> image generation result
+    seedance_results: Dict[str, Any] = Field(default_factory=dict) # platform -> {video_url, prompt, ...}
     execution_time: float = 0.0
 
 
@@ -100,6 +102,8 @@ class ContentTask(BaseModel):
     research_depth: str = "medium"  # shallow, medium, deep
     versions_per_platform: int = 3
     include_video: bool = True
+    include_image: bool = False           # 图片生成默认关闭（需要额外API配额）
+    include_seedance_video: bool = False  # Seedance真实视频生成默认关闭（需要FAL_KEY）
     
     # 任务状态
     status: TaskStatus = TaskStatus.CREATED

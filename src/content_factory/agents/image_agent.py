@@ -141,31 +141,23 @@ class ImageGenerationAgent(BaseAgent):
                                              platforms: List[str],
                                              images_per_platform: int,
                                              use_cache: bool) -> Dict[str, Any]:
-        """为多个平台生成图片"""
-        results = {}
-        
-        for platform in platforms:
-            self.logger.info(f"为平台 {platform} 生成图片")
+        """为多个平台并行生成图片"""
+        async def _one(platform: str) -> tuple[str, Dict]:
             try:
                 result = await self._generate_single_platform(
                     text=text,
                     platform=platform,
                     num_images=images_per_platform,
-                    use_cache=use_cache
+                    use_cache=use_cache,
                 )
-                results[platform] = result
-                
-                # 避免API限流
-                await asyncio.sleep(1)
-                
+                return platform, result
             except Exception as e:
                 self.logger.error(f"平台 {platform} 生成失败: {e}")
-                results[platform] = {
-                    "success": False,
-                    "error": str(e),
-                    "platform": platform
-                }
-        
+                return platform, {"success": False, "error": str(e), "platform": platform}
+
+        pairs = await asyncio.gather(*[_one(p) for p in platforms])
+        results = dict(pairs)
+
         return {
             "success": True,
             "type": "multi_platform",
@@ -175,8 +167,8 @@ class ImageGenerationAgent(BaseAgent):
             "summary": {
                 "total_platforms": len(platforms),
                 "successful_platforms": sum(1 for r in results.values() if r.get("success", False)),
-                "total_images": sum(r.get("num_generated", 0) for r in results.values() if r.get("success"))
-            }
+                "total_images": sum(r.get("num_generated", 0) for r in results.values() if r.get("success")),
+            },
         }
     
     async def _analyze_content(self, text: str) -> Dict:
@@ -388,13 +380,8 @@ class ImageGenerationAgent(BaseAgent):
             return result
             
         except Exception as e:
-            self.logger.error(f"API调用失败: {e}")
-            return {
-                "success": False,
-                "error": f"API调用失败: {str(e)}",
-                "platform": platform,
-                "prompt": prompt
-            }
+            self.logger.error(f"图片API调用失败 (platform={platform}): {e}")
+            raise RuntimeError(f"图片API调用失败 (platform={platform}): {e}") from e
     
     def _check_cache(self, prompt: str, platform: str) -> Optional[Dict]:
         """检查缓存"""
